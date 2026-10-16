@@ -1,0 +1,89 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         String   @default("AUXILIAR") // ADMIN, GESTOR, AUXILIAR, VALIDADOR, CONSULTA
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Event {
+  id             String         @id @default(cuid())
+  name           String
+  description    String?
+  startDate      DateTime
+  endDate        DateTime
+  location       String?
+  organizer      String?
+  capacity       Int?
+  status         String         @default("BORRADOR") // BORRADOR, PUBLICADO, ABIERTO, CERRADO, FINALIZADO
+  imageUrl       String?
+  requiredFields String         @default("{}") // JSON config of required fields
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  deadline       DateTime?
+  successMessage String?
+  registrations  Registration[]
+}
+
+model Person {
+  id                 String         @id @default(cuid())
+  documentType       String
+  documentNumber     String
+  firstName          String
+  middleName         String?
+  lastName           String
+  secondLastName     String?
+  birthDate          DateTime?
+  gender             String?
+  sex                String?
+  specialCondition   String? 
+  municipality       String?
+  locationType       String?
+  educationLevel     String?
+  dependency         String?
+  additionalData     String? 
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+  registrations      Registration[]
+
+  @@unique([documentType, documentNumber])
+}
+
+model Registration {
+  id             String    @id @default(cuid())
+  eventId        String
+  personId       String
+  qrToken        String    @unique
+  status         String    @default("REGISTRADO") // REGISTRADO, ASISTIO, CANCELADO
+  registeredAt   DateTime  @default(now())
+  attendedAt     DateTime?
+  attendedBy     String?   
+  checkpoints    String?   @default("[]") // JSON string of checkpoints history
+  
+  event          Event     @relation(fields: [eventId], references: [id])
+  person         Person    @relation(fields: [personId], references: [id])
+
+  @@unique([eventId, personId])
+}
+
+model ImportHistory {
+  id              String   @id @default(cuid())
+  filename        String
+  importedBy      String
+  recordsTotal    Int
+  recordsNew      Int
+  recordsUpdated  Int
+  recordsRejected Int
+  createdAt       DateTime @default(now())
+}
