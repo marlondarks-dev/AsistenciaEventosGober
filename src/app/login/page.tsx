@@ -72,9 +72,9 @@ export default function LoginPage() {
       <div className="card animate-fade-in" style={{
         position: 'relative',
         zIndex: 2,
-        maxWidth: '440px',
+        maxWidth: '520px',
         width: '100%',
-        padding: '2.5rem 2rem',
+        padding: '2rem 2.5rem',
         backgroundColor: 'rgba(255, 255, 255, 0.98)',
         borderRadius: '20px',
         boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
@@ -82,7 +82,7 @@ export default function LoginPage() {
         textAlign: 'center'
       }}>
         {/* Back Link */}
-        <div style={{ textAlign: 'left', marginBottom: '1rem' }}>
+        <div style={{ textAlign: 'left', marginBottom: '0.75rem' }}>
           <Link 
             href="/" 
             style={{ 
@@ -101,9 +101,9 @@ export default function LoginPage() {
 
         {/* Logo */}
         <div style={{
-          width: '140px',
-          height: '110px',
-          margin: '0 auto 1.25rem',
+          width: '120px',
+          height: '85px',
+          margin: '0 auto 0.75rem',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center'
@@ -118,20 +118,20 @@ export default function LoginPage() {
           gap: '0.4rem', 
           backgroundColor: '#EFF6FF', 
           color: '#1D4ED8', 
-          padding: '0.3rem 0.8rem', 
+          padding: '0.25rem 0.75rem', 
           borderRadius: '20px', 
-          fontSize: '0.75rem', 
+          fontSize: '0.72rem', 
           fontWeight: 800, 
           border: '1px solid #BFDBFE', 
-          marginBottom: '0.85rem' 
+          marginBottom: '0.6rem' 
         }}>
           <ShieldCheck size={14} /> ACCESO PRIVADO ADMINISTRATIVO
         </div>
 
-        <h1 style={{ fontSize: '1.45rem', fontWeight: 800, color: '#0F172A', marginBottom: '0.35rem', letterSpacing: '-0.02em' }}>
+        <h1 style={{ fontSize: '1.45rem', fontWeight: 800, color: '#0F172A', marginBottom: '0.25rem', letterSpacing: '-0.02em' }}>
           Portal Administrativo PILI
         </h1>
-        <p style={{ color: '#64748B', fontSize: '0.85rem', marginBottom: '1.75rem' }}>
+        <p style={{ color: '#64748B', fontSize: '0.85rem', marginBottom: '1.25rem', lineHeight: '1.4' }}>
           Ingresa tus credenciales autorizadas para gestionar eventos, inscripciones y reportes.
         </p>
 
@@ -154,9 +154,9 @@ export default function LoginPage() {
           </div>
         )}
 
-        <form onSubmit={handleSubmit} style={{ textAlign: 'left', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+        <form onSubmit={handleSubmit} style={{ textAlign: 'left', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           <div>
-            <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, color: '#334155', marginBottom: '0.4rem' }}>
+            <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, color: '#334155', marginBottom: '0.35rem' }}>
               Correo Electrónico *
             </label>
             <div style={{ position: 'relative' }}>
@@ -170,7 +170,7 @@ export default function LoginPage() {
                 placeholder="admin@gobernacion.gov.co"
                 style={{
                   width: '100%',
-                  padding: '0.7rem 0.85rem 0.7rem 2.5rem',
+                  padding: '0.65rem 0.85rem 0.65rem 2.5rem',
                   fontSize: '0.9rem',
                   borderRadius: '10px',
                   border: '1px solid #CBD5E1',
@@ -182,7 +182,7 @@ export default function LoginPage() {
           </div>
 
           <div>
-            <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, color: '#334155', marginBottom: '0.4rem' }}>
+            <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, color: '#334155', marginBottom: '0.35rem' }}>
               Contraseña *
             </label>
             <div style={{ position: 'relative' }}>
@@ -195,7 +195,7 @@ export default function LoginPage() {
                 placeholder="••••••••"
                 style={{
                   width: '100%',
-                  padding: '0.7rem 2.5rem 0.7rem 2.5rem',
+                  padding: '0.65rem 2.5rem 0.65rem 2.5rem',
                   fontSize: '0.9rem',
                   borderRadius: '10px',
                   border: '1px solid #CBD5E1',
@@ -231,7 +231,7 @@ export default function LoginPage() {
             className="btn btn-primary"
             style={{
               width: '100%',
-              padding: '0.85rem',
+              padding: '0.8rem',
               fontSize: '0.95rem',
               fontWeight: 700,
               display: 'flex',
@@ -239,7 +239,7 @@ export default function LoginPage() {
               justifyContent: 'center',
               gap: '0.5rem',
               borderRadius: '10px',
-              marginTop: '0.5rem',
+              marginTop: '0.25rem',
               cursor: loading ? 'not-allowed' : 'pointer',
               opacity: loading ? 0.75 : 1
             }}
@@ -249,7 +249,7 @@ export default function LoginPage() {
           </button>
         </form>
 
-        <div style={{ marginTop: '2rem', paddingTop: '1.25rem', borderTop: '1px solid #F1F5F9', fontSize: '0.75rem', color: '#94A3B8' }}>
+        <div style={{ marginTop: '1.5rem', paddingTop: '1rem', borderTop: '1px solid #F1F5F9', fontSize: '0.75rem', color: '#94A3B8' }}>
           Sistema de Inscripciones y Control de Asistencia PILI<br />
           © 2026 Gobernación de Norte de Santander
         </div>

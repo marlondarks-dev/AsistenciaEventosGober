@@ -30,9 +30,9 @@ export default function LandingPage() {
       <div className="card animate-fade-in" style={{
         position: 'relative',
         zIndex: 2,
-        maxWidth: '450px',
-        width: '90%',
-        padding: '3rem 2rem',
+        maxWidth: '520px',
+        width: '92%',
+        padding: '2.25rem 2.5rem',
         backgroundColor: 'rgba(255, 255, 255, 0.1)',
         backdropFilter: 'blur(20px)',
         WebkitBackdropFilter: 'blur(20px)',
@@ -44,9 +44,9 @@ export default function LandingPage() {
         
         {/* Logo Real */}
         <div style={{
-          width: '180px',
-          height: '180px',
-          margin: '0 auto 1.5rem',
+          width: '130px',
+          height: '130px',
+          margin: '0 auto 1.25rem',
           backgroundColor: 'rgba(255, 255, 255, 0.95)',
           borderRadius: '16px',
           display: 'flex',
@@ -59,20 +59,20 @@ export default function LandingPage() {
           <img src="/logo.png" alt="Logo Gobernación" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
         </div>
 
-        <h1 style={{ fontSize: '1.75rem', fontWeight: 800, marginBottom: '0.5rem', letterSpacing: '-0.025em' }}>
+        <h1 style={{ fontSize: '1.65rem', fontWeight: 800, marginBottom: '0.35rem', letterSpacing: '-0.025em' }}>
           Gobernación de Norte de Santander
         </h1>
-        <h2 style={{ fontSize: '1.125rem', color: 'rgba(255,255,255,0.8)', marginBottom: '2rem', fontWeight: 400 }}>
+        <h2 style={{ fontSize: '1.05rem', color: 'rgba(255,255,255,0.85)', marginBottom: '1.25rem', fontWeight: 400 }}>
           Portal Administrativo PILI
         </h2>
 
-        <p style={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.875rem', marginBottom: '2rem', lineHeight: 1.5 }}>
+        <p style={{ color: 'rgba(255,255,255,0.75)', fontSize: '0.875rem', marginBottom: '1.5rem', lineHeight: 1.5 }}>
           Gestión inteligente de eventos institucionales, caracterización de población e ingreso por código QR.
         </p>
 
         <Link href="/admin" className="btn btn-primary w-full" style={{
-          padding: '1rem',
-          fontSize: '1.125rem',
+          padding: '0.9rem',
+          fontSize: '1.05rem',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -85,7 +85,7 @@ export default function LandingPage() {
           Acceso Funcionarios
         </Link>
         
-        <div style={{ marginTop: '2rem', fontSize: '0.75rem', color: 'rgba(255,255,255,0.5)' }}>
+        <div style={{ marginTop: '1.5rem', fontSize: '0.75rem', color: 'rgba(255,255,255,0.5)' }}>
           © 2026 Gobernación de Norte de Santander. Todos los derechos reservados.
         </div>
       </div>
