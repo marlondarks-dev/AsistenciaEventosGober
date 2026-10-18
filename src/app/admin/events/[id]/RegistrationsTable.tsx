@@ -697,7 +697,7 @@ export default function RegistrationsTable({
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          zIndex: 100,
+          zIndex: 9999,
           padding: '1rem'
         }}>
           <div className="animate-fade-in" style={{
@@ -1117,7 +1117,7 @@ export default function RegistrationsTable({
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          zIndex: 100,
+          zIndex: 9999,
           padding: '1rem'
         }}>
           <div className="animate-fade-in" style={{

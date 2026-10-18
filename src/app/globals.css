@@ -181,7 +181,6 @@ input[type="date"] {
   box-shadow: var(--shadow);
   padding: 2rem;
   border: 1px solid rgba(226, 232, 240, 0.6);
-  backdrop-filter: blur(10px);
 }
 
 .glass-panel {
