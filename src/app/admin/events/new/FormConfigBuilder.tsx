@@ -339,14 +339,39 @@ export default function FormConfigBuilder({ initialConfig }: { initialConfig?: a
 
       {/* SECCIÓN 3: PUNTOS DE CONTROL */}
       <div style={{ borderTop: '2px dashed #E2E8F0', paddingTop: '1.5rem', marginBottom: '1.5rem' }}>
-        <h4 style={{ fontWeight: 700, color: '#0F172A', marginBottom: '0.5rem' }}>Puntos de Control (Scanners / Almuerzos)</h4>
-        <p style={{ fontSize: '0.8rem', color: '#64748B', marginBottom: '1rem' }}>Define los puntos de control para este evento separados por comas. (Ej. Ingreso, Almuerzo, Kit de Bienvenida). Estos aparecerán en el escáner de QR.</p>
-        <input 
-          type="text" 
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+          <div>
+            <h4 style={{ fontWeight: 700, color: '#0F172A', margin: 0 }}>Puntos de Control y Entregas por Día (Scanners / Comidas)</h4>
+            <p style={{ fontSize: '0.8rem', color: '#64748B', margin: '0.2rem 0 0' }}>
+              Define los puntos separados por comas. Para eventos de varios días, usa el formato: <code>Día - Comida</code> (ej. <code>Viernes 23 - Almuerzo</code>).
+            </p>
+          </div>
+          <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className="btn btn-outline"
+              style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem', backgroundColor: '#F0FDF4', color: '#16A34A', borderColor: '#BBF7D0' }}
+              onClick={() => setCheckpointsConfig("Ingreso, Kit de Bienvenida, Jueves 22 - Cena, Viernes 23 - Refrigerio Mañana, Viernes 23 - Almuerzo, Viernes 23 - Refrigerio Tarde, Viernes 23 - Cena, Sábado 24 - Desayuno, Sábado 24 - Refrigerio Mañana, Sábado 24 - Almuerzo, Sábado 24 - Refrigerio Tarde, Sábado 24 - Cena, Domingo 25 - Desayuno, Domingo 25 - Refrigerio Mañana, Domingo 25 - Almuerzo")}
+            >
+              ⚡ Cronograma Juventudes 2026 (4 Días)
+            </button>
+            <button
+              type="button"
+              className="btn btn-outline"
+              style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem', backgroundColor: '#fff' }}
+              onClick={() => setCheckpointsConfig("Ingreso, Kit de Bienvenida, Refrigerio Mañana, Almuerzo, Refrigerio Tarde")}
+            >
+              1 Solo Día Estándar
+            </button>
+          </div>
+        </div>
+
+        <textarea 
+          rows={3}
           value={checkpointsConfig} 
           onChange={e => setCheckpointsConfig(e.target.value)} 
-          placeholder="Ej. Ingreso, Almuerzo, Kit de Bienvenida" 
-          style={{ width: '100%', padding: '0.75rem', borderRadius: '6px', border: '1px solid #CBD5E1' }} 
+          placeholder="Ej. Ingreso, Kit de Bienvenida, Jueves 22 - Cena, Viernes 23 - Almuerzo..." 
+          style={{ width: '100%', padding: '0.75rem', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '0.85rem' }} 
         />
       </div>
 

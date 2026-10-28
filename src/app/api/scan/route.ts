@@ -97,20 +97,75 @@ export async function POST(request: Request) {
     const cpArray = registration.checkpoints ? JSON.parse(registration.checkpoints) : []
     const cpName = checkpoint || 'Ingreso'
 
-    // Check if they already scanned THIS checkpoint
+    // Helper para detectar si un punto corresponde al Kit de Bienvenida
+    const isKitCheckpoint = (name: string) => {
+      const n = (name || '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+      return n.includes('kit') || n.includes('bienvenida')
+    }
+
+    // 1. CONDICIÓN ESPECIAL PARA KIT DE BIENVENIDA:
+    // El kit se entrega SOLO UNA VEZ por persona durante todo el evento, sin importar los días configurados.
+    // Si el checkpoint actual es Kit, verificamos si ya recibió kit en cualquier día (Jueves, Viernes, etc.)
+    if (isKitCheckpoint(cpName)) {
+      const existingKitScan = cpArray.find((c: any) => isKitCheckpoint(c.name))
+      if (existingKitScan) {
+        const horaStr = new Date(existingKitScan.timestamp).toLocaleString('es-CO', { 
+          timeZone: 'America/Bogota', 
+          hour: '2-digit', 
+          minute: '2-digit',
+          hour12: true 
+        })
+        const fechaStr = new Date(existingKitScan.timestamp).toLocaleDateString('es-CO', {
+          timeZone: 'America/Bogota',
+          weekday: 'long',
+          day: 'numeric',
+          month: 'short'
+        })
+        const porStr = existingKitScan.attendedBy ? ` por ${existingKitScan.attendedBy}` : ''
+        return NextResponse.json({ 
+          error: `⚠️ ¡DUPLICADO BLOQUEADO! Ya se le entregó su Kit de Bienvenida (${existingKitScan.name}) el ${fechaStr} a las ${horaStr}${porStr}. NO entregar otro kit.`, 
+          attendedAt: existingKitScan.timestamp,
+          person: registration.person,
+          alreadyHasKit: true,
+          kitScan: existingKitScan
+        }, { status: 409 })
+      }
+    }
+
+    // 2. Verificación estándar para los demás checkpoints (Refrigerios, Almuerzo, Cena, Ingreso por día)
     const existingScan = cpArray.find((c: any) => c.name === cpName)
     if (existingScan) {
+       const horaStr = new Date(existingScan.timestamp).toLocaleString('es-CO', { 
+         timeZone: 'America/Bogota', 
+         hour: '2-digit', 
+         minute: '2-digit',
+         hour12: true 
+       })
+       const porStr = existingScan.attendedBy ? ` por ${existingScan.attendedBy}` : ''
        return NextResponse.json({ 
-         error: `Ya registró su paso por: ${cpName}`, 
+         error: `Ya registró su entrega de: ${cpName} (a las ${horaStr}${porStr})`, 
          attendedAt: existingScan.timestamp,
          person: registration.person
        }, { status: 409 })
     }
 
+    const now = new Date()
+    const nowColombia = now.toLocaleString('es-CO', { 
+      timeZone: 'America/Bogota',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true
+    })
+
     // Otherwise, add scan
     cpArray.push({
        name: cpName,
-       timestamp: new Date().toISOString(),
+       timestamp: now.toISOString(),
+       horaColombia: nowColombia,
        attendedBy: attendedBy || 'Lector de QR',
        evidenceUrl: null
     })
@@ -134,7 +189,9 @@ export async function POST(request: Request) {
       person: updated.person,
       attendedAt: updated.attendedAt,
       registrationId: updated.id,
-      checkpoint: cpName
+      checkpoint: cpName,
+      checkpoints: cpArray,
+      hasKit: cpArray.some((c: any) => isKitCheckpoint(c.name))
     })
 
   } catch (error: any) {

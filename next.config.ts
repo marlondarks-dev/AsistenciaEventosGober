@@ -1,5 +1,7 @@
 import type { NextConfig } from "next";
 
+process.env.TZ = 'America/Bogota';
+
 const nextConfig: NextConfig = {
   cacheComponents: true,
   partialPrefetching: true,

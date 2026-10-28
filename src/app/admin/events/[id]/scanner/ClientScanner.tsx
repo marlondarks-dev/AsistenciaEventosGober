@@ -4,10 +4,69 @@ import { useState, useRef, useEffect } from 'react'
 import Link from 'next/link'
 import { ArrowLeft, CheckCircle, AlertTriangle, Scan, Camera, User, RefreshCw, Volume2, Shield, QrCode, UploadCloud, CheckCircle2, ArrowRight } from 'lucide-react'
 
-export default function ClientScanner({ eventId, checkpoints = ['Ingreso'] }: { eventId: string, checkpoints?: string[] }) {
+export default function ClientScanner({ 
+  eventId, 
+  eventName,
+  checkpoints = ['Ingreso'],
+  sessionUser
+}: { 
+  eventId: string
+  eventName?: string
+  checkpoints?: string[]
+  sessionUser?: { id: string; email: string; name: string; role: string; assignedEventId?: string | null } | null
+}) {
   
-  const [activeCheckpoint, setActiveCheckpoint] = useState(checkpoints[0] || 'Ingreso')
-  const [operatorName, setOperatorName] = useState('Lector de QR y Control')
+  // Parse checkpoints into day and meal components
+  const parsedCheckpoints = checkpoints.map(cp => {
+    if (cp.includes(' - ')) {
+      const [dayPart, ...rest] = cp.split(' - ')
+      return {
+        fullName: cp,
+        day: dayPart.trim(),
+        mealLabel: rest.join(' - ').trim()
+      }
+    }
+    return {
+      fullName: cp,
+      day: 'General',
+      mealLabel: cp
+    }
+  })
+
+  // Extract distinct days preserving original order
+  const distinctDays: string[] = []
+  parsedCheckpoints.forEach(item => {
+    if (!distinctDays.includes(item.day)) {
+      distinctDays.push(item.day)
+    }
+  })
+
+  const hasDays = distinctDays.some(d => d !== 'General')
+
+  // Find initial day (auto-match with today's date if possible)
+  const getInitialDay = () => {
+    if (!hasDays) return 'Todos'
+    if (typeof window !== 'undefined') {
+      const todayNum = new Date().getDate().toString()
+      const match = distinctDays.find(d => d !== 'General' && d.includes(todayNum))
+      if (match) return match
+    }
+    const firstMealDay = distinctDays.find(d => d !== 'General')
+    return firstMealDay || distinctDays[0] || 'Todos'
+  }
+
+  const [selectedDay, setSelectedDay] = useState<string>(getInitialDay)
+
+  // Find initial checkpoint
+  const getInitialCheckpoint = () => {
+    if (!hasDays) return checkpoints[0] || 'Ingreso'
+    const initialDay = getInitialDay()
+    const matching = parsedCheckpoints.find(cp => cp.day === initialDay)
+    return matching?.fullName || checkpoints[0] || 'Ingreso'
+  }
+
+  const [activeCheckpoint, setActiveCheckpoint] = useState(getInitialCheckpoint)
+  const [operatorName, setOperatorName] = useState(sessionUser?.name || 'Lector de QR y Control')
   const [token, setToken] = useState('')
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<any>(null)
@@ -18,6 +77,19 @@ export default function ClientScanner({ eventId, checkpoints = ['Ingreso'] }: { 
   const [html5QrCodeInstance, setHtml5QrCodeInstance] = useState<any>(null)
   const isScanningRef = useRef(false)
   const [wasCameraActiveOnScan, setWasCameraActiveOnScan] = useState(false)
+
+  // Mutable refs to prevent stale closure when camera is actively running
+  const activeCheckpointRef = useRef(activeCheckpoint)
+  const operatorNameRef = useRef(operatorName)
+  const executeScanRef = useRef<(val: string) => Promise<void>>(async () => {})
+
+  useEffect(() => {
+    activeCheckpointRef.current = activeCheckpoint
+  }, [activeCheckpoint])
+
+  useEffect(() => {
+    operatorNameRef.current = operatorName
+  }, [operatorName])
 
   // Evidence upload state
   const [uploadingEvidence, setUploadingEvidence] = useState(false)
@@ -96,7 +168,7 @@ export default function ClientScanner({ eventId, checkpoints = ['Ingreso'] }: { 
         (decodedText) => {
           if (!isScanningRef.current) {
             isScanningRef.current = true
-            executeScan(decodedText)
+            executeScanRef.current(decodedText)
             // Pause slightly so it doesn't multi-scan the same QR
             setTimeout(() => {
               isScanningRef.current = false
@@ -172,6 +244,9 @@ export default function ClientScanner({ eventId, checkpoints = ['Ingreso'] }: { 
     setResult(null)
     setEvidenceUrl(null)
     
+    const targetCheckpoint = activeCheckpointRef.current
+    const targetOperator = operatorNameRef.current
+
     try {
       const res = await fetch('/api/scan', {
         method: 'POST',
@@ -179,8 +254,8 @@ export default function ClientScanner({ eventId, checkpoints = ['Ingreso'] }: { 
         body: JSON.stringify({ 
           qrToken: cleanToken, 
           eventId, 
-          checkpoint: activeCheckpoint,
-          attendedBy: operatorName 
+          checkpoint: targetCheckpoint,
+          attendedBy: targetOperator 
         })
       })
       
@@ -220,6 +295,11 @@ export default function ClientScanner({ eventId, checkpoints = ['Ingreso'] }: { 
     }
   }
 
+  // Keep executeScanRef always fresh with current render
+  useEffect(() => {
+    executeScanRef.current = executeScan
+  })
+
   const handleScan = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!token) return
@@ -245,7 +325,7 @@ export default function ClientScanner({ eventId, checkpoints = ['Ingreso'] }: { 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           registrationId: result.data.registrationId,
-          checkpoint: activeCheckpoint,
+          checkpoint: activeCheckpointRef.current,
           evidenceUrl: uploadJson.url
         })
       })
@@ -297,90 +377,207 @@ export default function ClientScanner({ eventId, checkpoints = ['Ingreso'] }: { 
         top: 0,
         zIndex: 50
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <Link href={`/admin/events/${eventId}`} style={{ color: '#94A3B8', display: 'flex', alignItems: 'center' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', minWidth: 0 }}>
+          <Link href={`/admin/events/${eventId}`} style={{ color: '#94A3B8', display: 'flex', alignItems: 'center', flexShrink: 0 }} title="Volver al evento">
             <ArrowLeft size={22} />
           </Link>
-          <div>
-            <h1 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: '#FFFFFF', letterSpacing: '-0.02em' }}>
-              PILI Scanner PWA
+          <div style={{ minWidth: 0 }}>
+            <h1 style={{ 
+              fontSize: '0.95rem', 
+              fontWeight: 800, 
+              margin: 0, 
+              color: '#FFFFFF', 
+              letterSpacing: '-0.02em',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              maxWidth: '260px'
+            }}>
+              {eventName || 'Escáner QR'}
             </h1>
-            <p style={{ fontSize: '0.7rem', color: '#94A3B8', margin: 0 }}>
-              Control de Entregas y Asistencia
+            <p style={{ fontSize: '0.7rem', color: '#38BDF8', margin: 0, fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+              <span>🎪</span>
+              <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '240px' }}>
+                {eventName ? `Evento: ${eventName}` : 'Control de Asistencia y Refrigerios'}
+              </span>
             </p>
           </div>
         </div>
 
         {/* Operator Badge */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', backgroundColor: '#0F172A', padding: '0.35rem 0.65rem', borderRadius: '20px', border: '1px solid #334155' }}>
-          <User size={13} color="#38BDF8" />
-          <select 
-            value={operatorName} 
-            onChange={e => setOperatorName(e.target.value)}
-            style={{ 
-              background: 'transparent', 
-              border: 'none', 
-              color: '#38BDF8', 
-              fontSize: '0.75rem', 
-              fontWeight: 600, 
-              outline: 'none',
-              cursor: 'pointer'
-            }}
-          >
-            <option value="Lector de QR y Control" style={{ background: '#1E293B', color: '#fff' }}>Lector de QR</option>
-            <option value="Operador Alimentación" style={{ background: '#1E293B', color: '#fff' }}>Operador Alimentación</option>
-            <option value="Operador Logística y Kits" style={{ background: '#1E293B', color: '#fff' }}>Operador Logística</option>
-            <option value="Validador Puerta" style={{ background: '#1E293B', color: '#fff' }}>Validador Puerta</option>
-          </select>
+        <div style={{ 
+          display: 'flex', 
+          alignItems: 'center', 
+          gap: '0.4rem', 
+          backgroundColor: '#0F172A', 
+          padding: '0.4rem 0.75rem', 
+          borderRadius: '20px', 
+          border: '1px solid #334155',
+          flexShrink: 0
+        }}>
+          <User size={14} color="#38BDF8" />
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <span style={{ color: '#F8FAFC', fontSize: '0.75rem', fontWeight: 700, maxWidth: '130px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {operatorName}
+            </span>
+            {sessionUser?.role && (
+              <span style={{ fontSize: '0.62rem', color: '#38BDF8', fontWeight: 600 }}>
+                {sessionUser.role}
+              </span>
+            )}
+          </div>
         </div>
       </div>
 
       <div style={{ flex: 1, padding: '1rem', maxWidth: '640px', width: '100%', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
         
-        {/* CHECKPOINT SELECTOR PILLS */}
-        <div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-            <label style={{ fontSize: '0.75rem', fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              Punto a Registrar Ahora:
+        {/* CHECKPOINT / DAY SELECTOR BAR */}
+        <div style={{ backgroundColor: '#1E293B', borderRadius: '16px', padding: '0.9rem', border: '1px solid #334155' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.65rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+            <label style={{ fontSize: '0.72rem', fontWeight: 800, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              🎯 Entrega / Punto a Registrar:
             </label>
-            <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#38BDF8', backgroundColor: '#0369A1', padding: '0.15rem 0.5rem', borderRadius: '6px' }}>
-              {activeCheckpoint}
+            <span style={{ 
+              fontSize: '0.82rem', 
+              fontWeight: 800, 
+              color: '#38BDF8', 
+              backgroundColor: '#0F172A', 
+              border: '1px solid #0284C7',
+              padding: '0.25rem 0.75rem', 
+              borderRadius: '20px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.4rem',
+              boxShadow: '0 2px 8px rgba(2, 132, 199, 0.25)'
+            }}>
+              <span style={{ fontSize: '1rem' }}>{getCheckpointIcon(activeCheckpoint)}</span>
+              <span>{activeCheckpoint}</span>
             </span>
           </div>
 
+          {/* DAY TABS BAR (When multi-day checkpoints are present) */}
+          {hasDays && (
+            <div style={{ marginBottom: '0.75rem', borderBottom: '1px solid #334155', paddingBottom: '0.65rem' }}>
+              <div style={{ 
+                display: 'flex', 
+                gap: '0.4rem', 
+                overflowX: 'auto', 
+                scrollbarWidth: 'none',
+                alignItems: 'center'
+              }}>
+                <span style={{ fontSize: '0.7rem', color: '#94A3B8', fontWeight: 800, textTransform: 'uppercase', marginRight: '0.2rem', whiteSpace: 'nowrap' }}>
+                  📅 DÍA:
+                </span>
+                {distinctDays.map(dayName => {
+                  const isDaySelected = selectedDay === dayName
+                  const dayCheckpoints = parsedCheckpoints.filter(cp => cp.day === dayName)
+                  return (
+                    <button
+                      key={dayName}
+                      type="button"
+                      onClick={() => {
+                        setSelectedDay(dayName)
+                        const firstInDay = dayCheckpoints[0]
+                        if (firstInDay && activeCheckpointRef.current.indexOf(dayName) === -1) {
+                          setActiveCheckpoint(firstInDay.fullName)
+                          activeCheckpointRef.current = firstInDay.fullName
+                          setResult(null)
+                        }
+                      }}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.35rem',
+                        padding: '0.45rem 0.8rem',
+                        borderRadius: '20px',
+                        fontSize: '0.8rem',
+                        fontWeight: 700,
+                        whiteSpace: 'nowrap',
+                        cursor: 'pointer',
+                        transition: 'all 0.15s ease',
+                        border: isDaySelected ? '2px solid #38BDF8' : '1px solid #334155',
+                        backgroundColor: isDaySelected ? '#0284C7' : '#0F172A',
+                        color: isDaySelected ? '#FFFFFF' : '#94A3B8',
+                        boxShadow: isDaySelected ? '0 2px 8px rgba(2, 132, 199, 0.4)' : 'none'
+                      }}
+                    >
+                      <span>{dayName}</span>
+                      <span style={{ 
+                        fontSize: '0.7rem', 
+                        padding: '0.1rem 0.35rem', 
+                        borderRadius: '10px', 
+                        backgroundColor: isDaySelected ? 'rgba(255,255,255,0.25)' : '#1E293B',
+                        color: isDaySelected ? '#FFFFFF' : '#64748B'
+                      }}>
+                        {dayCheckpoints.length}
+                      </span>
+                    </button>
+                  )
+                })}
+
+                <button
+                  type="button"
+                  onClick={() => setSelectedDay('Todos')}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.35rem',
+                    padding: '0.45rem 0.8rem',
+                    borderRadius: '20px',
+                    fontSize: '0.8rem',
+                    fontWeight: 700,
+                    whiteSpace: 'nowrap',
+                    cursor: 'pointer',
+                    border: selectedDay === 'Todos' ? '2px solid #38BDF8' : '1px solid #334155',
+                    backgroundColor: selectedDay === 'Todos' ? '#0284C7' : '#0F172A',
+                    color: selectedDay === 'Todos' ? '#FFFFFF' : '#94A3B8'
+                  }}
+                >
+                  Ver Todos
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* MEAL / CHECKPOINT BUTTONS */}
           <div style={{ 
             display: 'flex', 
             gap: '0.5rem', 
             overflowX: 'auto', 
-            paddingBottom: '0.5rem',
+            paddingBottom: '0.25rem',
             scrollbarWidth: 'none'
           }}>
-            {checkpoints.map(cp => {
-              const isSelected = activeCheckpoint === cp
+            {(selectedDay === 'Todos' ? parsedCheckpoints : parsedCheckpoints.filter(cp => cp.day === selectedDay)).map(cp => {
+              const isSelected = activeCheckpoint === cp.fullName
               return (
                 <button
-                  key={cp}
+                  key={cp.fullName}
                   type="button"
-                  onClick={() => { setActiveCheckpoint(cp); setResult(null); }}
+                  onClick={() => { 
+                    setActiveCheckpoint(cp.fullName); 
+                    activeCheckpointRef.current = cp.fullName;
+                    setResult(null); 
+                  }}
                   style={{
                     display: 'flex',
                     alignItems: 'center',
-                    gap: '0.4rem',
-                    padding: '0.6rem 0.9rem',
+                    gap: '0.45rem',
+                    padding: '0.65rem 1rem',
                     borderRadius: '12px',
-                    fontSize: '0.85rem',
-                    fontWeight: 700,
+                    fontSize: '0.88rem',
+                    fontWeight: 800,
                     whiteSpace: 'nowrap',
                     cursor: 'pointer',
                     transition: 'all 0.15s ease',
-                    border: isSelected ? '2px solid #38BDF8' : '1px solid #334155',
-                    backgroundColor: isSelected ? '#0284C7' : '#1E293B',
+                    border: isSelected ? '2px solid #34D399' : '1px solid #334155',
+                    backgroundColor: isSelected ? '#059669' : '#0F172A',
                     color: isSelected ? '#FFFFFF' : '#CBD5E1',
-                    boxShadow: isSelected ? '0 4px 12px rgba(2, 132, 199, 0.4)' : 'none'
+                    boxShadow: isSelected ? '0 4px 14px rgba(5, 150, 105, 0.4)' : 'none'
                   }}
                 >
-                  <span style={{ fontSize: '1.1rem' }}>{getCheckpointIcon(cp)}</span>
-                  {cp}
+                  <span style={{ fontSize: '1.2rem' }}>{getCheckpointIcon(cp.mealLabel)}</span>
+                  <span>{selectedDay === 'Todos' ? cp.fullName : cp.mealLabel}</span>
+                  {isSelected && <span style={{ fontSize: '0.8rem', marginLeft: '0.2rem' }}>✓</span>}
                 </button>
               )
             })}
@@ -635,6 +832,24 @@ export default function ClientScanner({ eventId, checkpoints = ['Ingreso'] }: { 
                       {result.data.person.documentType} {result.data.person.documentNumber}
                       {result.data.person.municipality && ` • ${result.data.person.municipality}`}
                     </p>
+                    {typeof result.data.hasKit === 'boolean' && (
+                      <div style={{ marginTop: '0.5rem', paddingTop: '0.5rem', borderTop: '1px solid rgba(255,255,255,0.15)', display: 'flex', justifyContent: 'center' }}>
+                        <span style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.35rem',
+                          fontSize: '0.78rem',
+                          fontWeight: 700,
+                          padding: '0.2rem 0.65rem',
+                          borderRadius: '20px',
+                          backgroundColor: result.data.hasKit ? '#065F46' : '#78350F',
+                          color: result.data.hasKit ? '#6EE7B7' : '#FDE68A',
+                          border: result.data.hasKit ? '1px solid #059669' : '1px solid #D97706'
+                        }}>
+                          {result.data.hasKit ? '🎒 Kit: Ya Entregado' : '🎒 Kit: Pendiente por reclamar'}
+                        </span>
+                      </div>
+                    )}
                   </div>
 
                   {/* ADJUNTAR EVIDENCIA FOTOGRÁFICA (OPCIONAL) */}
@@ -761,14 +976,33 @@ export default function ClientScanner({ eventId, checkpoints = ['Ingreso'] }: { 
               {/* DUPLICATE WARNING */}
               {result.type === 'warning' && (
                 <>
-                  <AlertTriangle size={46} color="#FBBF24" style={{ margin: '0 auto' }} />
+                  <div style={{ display: 'flex', justifyContent: 'center' }}>
+                    {result.data.alreadyHasKit ? (
+                      <span style={{ fontSize: '3rem', lineHeight: 1 }}>🎒🚫</span>
+                    ) : (
+                      <AlertTriangle size={46} color="#FBBF24" />
+                    )}
+                  </div>
                   <div>
-                    <h2 style={{ fontSize: '1.45rem', fontWeight: 800, color: '#FBBF24', margin: '0 0 0.35rem 0' }}>
-                      ENTREGA YA REALIZADA
+                    <h2 style={{ fontSize: '1.45rem', fontWeight: 800, color: result.data.alreadyHasKit ? '#F87171' : '#FBBF24', margin: '0 0 0.35rem 0' }}>
+                      {result.data.alreadyHasKit ? '¡YA RECIBIÓ SU KIT DE BIENVENIDA!' : 'ENTREGA YA REALIZADA'}
                     </h2>
-                    <p style={{ fontSize: '0.95rem', color: '#FEF3C7', margin: 0, fontWeight: 700 }}>
-                      {result.data.error}
-                    </p>
+                    <div style={{
+                      backgroundColor: result.data.alreadyHasKit ? '#7F1D1D' : 'rgba(0,0,0,0.25)',
+                      border: result.data.alreadyHasKit ? '2px solid #EF4444' : '1px solid rgba(255,255,255,0.1)',
+                      borderRadius: '12px',
+                      padding: '0.85rem',
+                      marginTop: '0.5rem'
+                    }}>
+                      <p style={{ fontSize: '0.95rem', color: '#FEF3C7', margin: 0, fontWeight: 700 }}>
+                        {result.data.error}
+                      </p>
+                      {result.data.alreadyHasKit && (
+                        <p style={{ margin: '0.45rem 0 0', fontSize: '0.82rem', color: '#FCA5A5', fontWeight: 800 }}>
+                          🛑 ADVERTENCIA: NO ENTREGAR OTRO KIT. El kit se entrega únicamente 1 vez por persona en todo el evento.
+                        </p>
+                      )}
+                    </div>
                   </div>
                   <div style={{ backgroundColor: 'rgba(0,0,0,0.3)', padding: '1rem', borderRadius: '14px', border: '1px solid rgba(255,255,255,0.1)' }}>
                     <h3 style={{ fontSize: '1.2rem', fontWeight: 800, margin: '0 0 0.25rem 0' }}>
@@ -776,6 +1010,7 @@ export default function ClientScanner({ eventId, checkpoints = ['Ingreso'] }: { 
                     </h3>
                     <p style={{ color: '#FDE68A', margin: 0, fontSize: '0.85rem' }}>
                       {result.data.person.documentType} {result.data.person.documentNumber}
+                      {result.data.person.municipality && ` • ${result.data.person.municipality}`}
                     </p>
                   </div>
                 </>
@@ -786,11 +1021,16 @@ export default function ClientScanner({ eventId, checkpoints = ['Ingreso'] }: { 
                 <>
                   <AlertTriangle size={46} color="#F87171" style={{ margin: '0 auto' }} />
                   <h2 style={{ fontSize: '1.4rem', fontWeight: 800, color: '#F87171', margin: 0 }}>
-                    CÓDIGO NO VÁLIDO
+                    {result.message?.includes('pertenece al evento') ? '⚠️ ASISTENTE DE OTRO EVENTO' : 'CÓDIGO NO VÁLIDO'}
                   </h2>
-                  <p style={{ fontSize: '0.95rem', color: '#FECACA', margin: 0 }}>
+                  <p style={{ fontSize: '0.95rem', color: '#FECACA', margin: 0, lineHeight: 1.4 }}>
                     {result.message}
                   </p>
+                  {result.message?.includes('pertenece al evento') && (
+                    <div style={{ backgroundColor: 'rgba(0,0,0,0.3)', padding: '0.75rem', borderRadius: '10px', fontSize: '0.82rem', color: '#FCA5A5', marginTop: '0.25rem' }}>
+                      💡 Este asistente debe reclamar su refrigerio en la estación del otro evento.
+                    </div>
+                  )}
                 </>
               )}
 

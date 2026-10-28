@@ -14,6 +14,10 @@ export async function POST(request: Request) {
       )
     }
 
+    try {
+      await prisma.$executeRawUnsafe(`ALTER TABLE "User" ADD COLUMN "assignedEventId" TEXT;`)
+    } catch (e) {}
+
     const normalizedEmail = email.toString().toLowerCase().trim()
 
     const user = await prisma.user.findUnique({
@@ -39,7 +43,8 @@ export async function POST(request: Request) {
       id: user.id,
       email: user.email,
       name: user.name,
-      role: user.role
+      role: user.role,
+      assignedEventId: user.assignedEventId || null
     })
 
     return NextResponse.json({
@@ -48,7 +53,8 @@ export async function POST(request: Request) {
         id: user.id,
         email: user.email,
         name: user.name,
-        role: user.role
+        role: user.role,
+        assignedEventId: user.assignedEventId || null
       }
     })
   } catch (error: any) {

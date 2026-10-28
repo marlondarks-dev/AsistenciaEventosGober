@@ -17,28 +17,35 @@ export default async function StickerPage({ params }: { params: Promise<{ id: st
     redirect('/')
   }
 
-  // QR Code options optimized for small print
+  // QR Code options optimized for thermal label print (80mm x 40mm)
   const qrDataUrl = await QRCode.toDataURL(registration.qrToken, {
     errorCorrectionLevel: 'M',
     margin: 0,
-    width: 150, // higher resolution for crisp print
+    width: 250, // higher resolution for crisp 203/300 DPI thermal print
     color: {
       dark: '#000000',
       light: '#FFFFFF'
     }
   })
 
-  // Format short name for event
-  const shortEventName = registration.event.name.length > 20 
-    ? registration.event.name.substring(0, 18) + '...'
+  // Format event name
+  const eventName = registration.event.name.length > 36 
+    ? registration.event.name.substring(0, 33) + '...'
     : registration.event.name
 
-  // Format participant name (First Name + First Last Name)
-  const participantName = `${registration.person.firstName.split(' ')[0]} ${registration.person.lastName.split(' ')[0]}`
+  // Format participant name (First Name + Last Name)
+  const fullName = [
+    registration.person.firstName,
+    registration.person.lastName
+  ].filter(Boolean).join(' ')
+  
+  const participantName = fullName.length > 28 
+    ? `${registration.person.firstName.split(' ')[0]} ${registration.person.lastName.split(' ')[0]}`
+    : fullName
 
   // Format document: e.g. "CC 1090426187"
   const docText = `${registration.person.documentType || 'DOC'} ${registration.person.documentNumber || ''}`
-
+  const municipality = registration.person.municipality || ''
   const shortId = registration.id.slice(-6).toUpperCase()
 
   return (
@@ -46,82 +53,136 @@ export default async function StickerPage({ params }: { params: Promise<{ id: st
       <style dangerouslySetInnerHTML={{
         __html: `
           @page {
-            size: 50mm 30mm;
+            size: 80mm 40mm;
             margin: 0;
           }
-          body {
+          html, body {
             margin: 0;
             padding: 0;
             background-color: white;
             color: black;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            width: 50mm;
-            height: 30mm;
+            width: 80mm;
+            height: 40mm;
             overflow: hidden;
-            display: flex;
+            box-sizing: border-box;
           }
           .sticker-container {
-            width: 100%;
-            height: 100%;
-            padding: 2mm;
+            width: 80mm;
+            height: 40mm;
+            padding: 2.5mm 3.5mm;
             display: flex;
+            align-items: center;
+            justify-content: space-between;
             box-sizing: border-box;
+            background-color: white;
           }
           .left-pane {
             flex: 1;
+            height: 100%;
             display: flex;
             flex-direction: column;
             justify-content: space-between;
-            padding-right: 2mm;
+            padding-right: 3mm;
             overflow: hidden;
+            box-sizing: border-box;
           }
           .right-pane {
-            width: 22mm;
+            width: 32mm;
+            height: 32mm;
             display: flex;
             align-items: center;
             justify-content: center;
+            flex-shrink: 0;
           }
           .event-name {
-            font-size: 7pt;
+            font-size: 7.5pt;
             font-weight: 700;
             text-transform: uppercase;
-            line-height: 1.1;
+            line-height: 1.15;
+            color: #1E293B;
+            border-bottom: 0.5px solid #CBD5E1;
+            padding-bottom: 0.8mm;
+            margin-bottom: 1mm;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
           }
           .participant-name {
-            font-size: 9.5pt;
+            font-size: 11pt;
             font-weight: 800;
-            line-height: 1.1;
+            line-height: 1.15;
+            text-transform: uppercase;
+            color: #000000;
             word-wrap: break-word;
+            margin-bottom: 0.5mm;
           }
           .doc-number {
-            font-size: 8pt;
+            font-size: 9pt;
             font-weight: 700;
             line-height: 1.1;
+            color: #1E293B;
+          }
+          .municipality-tag {
+            font-size: 7.5pt;
+            font-weight: 600;
+            color: #475569;
+            text-transform: uppercase;
+            line-height: 1.1;
+            margin-top: 0.5mm;
           }
           .short-id {
-            font-size: 6pt;
+            font-size: 6.5pt;
             font-family: monospace;
-            color: #333;
+            font-weight: 600;
+            color: #64748B;
+            border-top: 0.5px solid #CBD5E1;
+            padding-top: 0.8mm;
           }
           .qr-image {
-            width: 21mm;
-            height: 21mm;
+            width: 32mm;
+            height: 32mm;
             display: block;
           }
-          /* Hide everything else if this is just a printable view */
+          /* Screen preview */
           @media screen {
             body {
-              background-color: #f0f0f0;
+              background-color: #F1F5F9;
               display: flex;
+              flex-direction: column;
               justify-content: center;
               align-items: center;
               min-height: 100vh;
+              width: 100vw;
+              height: 100vh;
             }
             .sticker-container {
               background: white;
-              box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-              width: 50mm;
-              height: 30mm;
+              box-shadow: 0 10px 25px -5px rgba(0,0,0,0.1), 0 8px 10px -6px rgba(0,0,0,0.1);
+              width: 80mm;
+              height: 40mm;
+              border: 1px solid #E2E8F0;
+              border-radius: 6px;
+              position: relative;
+            }
+          }
+          /* Print styles */
+          @media print {
+            body {
+              width: 80mm !important;
+              height: 40mm !important;
+              overflow: hidden !important;
+            }
+            .sticker-container {
+              width: 80mm !important;
+              height: 40mm !important;
+              box-shadow: none !important;
+              border: none !important;
+              page-break-inside: avoid !important;
+              page-break-after: avoid !important;
+            }
+            .no-print {
+              display: none !important;
             }
           }
         `
@@ -129,10 +190,13 @@ export default async function StickerPage({ params }: { params: Promise<{ id: st
 
       <div className="sticker-container">
         <div className="left-pane">
-          <div className="event-name">{shortEventName}</div>
-          <div className="participant-name">{participantName}</div>
-          <div className="doc-number">{docText}</div>
-          <div className="short-id">ID: {shortId}</div>
+          <div>
+            <div className="event-name">{eventName}</div>
+            <div className="participant-name">{participantName}</div>
+            <div className="doc-number">{docText}</div>
+            {municipality && <div className="municipality-tag">📍 {municipality}</div>}
+          </div>
+          <div className="short-id">ID: {shortId} • GOBERNACIÓN NDS</div>
         </div>
         <div className="right-pane">
           <img src={qrDataUrl} alt="QR" className="qr-image" />
@@ -165,17 +229,6 @@ export default async function StickerPage({ params }: { params: Promise<{ id: st
           Siguiente Registro
         </a>
       </div>
-
-      {/* CSS to hide buttons when printing */}
-      <style dangerouslySetInnerHTML={{
-        __html: `
-          @media print {
-            .no-print {
-              display: none !important;
-            }
-          }
-        `
-      }} />
     </>
   )
 }

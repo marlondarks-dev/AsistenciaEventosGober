@@ -72,8 +72,11 @@ export async function PATCH(
       customAnswers
     } = body
 
-    // 1. Update registration status if provided
+    // 1. Update registration status and checkpoints if provided
     const regUpdateData: any = {}
+    if (body.checkpoints !== undefined) {
+      regUpdateData.checkpoints = typeof body.checkpoints === 'string' ? body.checkpoints : JSON.stringify(body.checkpoints)
+    }
     if (status && status !== reg.status) {
       regUpdateData.status = status
       if (status === 'ASISTIO') {

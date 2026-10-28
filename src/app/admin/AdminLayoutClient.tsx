@@ -3,14 +3,14 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { LayoutDashboard, Calendar, Upload, Users, Settings, Menu, X, ShieldCheck, LogOut } from 'lucide-react'
+import { LayoutDashboard, Calendar, Upload, Users, Settings, Menu, X, ShieldCheck, LogOut, QrCode } from 'lucide-react'
 
 export default function AdminLayoutClient({ 
   children,
   sessionUser
 }: { 
   children: React.ReactNode,
-  sessionUser?: { id: string; email: string; name: string; role: string } | null
+  sessionUser?: { id: string; email: string; name: string; role: string; assignedEventId?: string | null } | null
 }) {
   const [mobileOpen, setMobileOpen] = useState(false)
   const pathname = usePathname()
@@ -22,13 +22,35 @@ export default function AdminLayoutClient({
     window.location.href = '/login'
   }
 
-  const navItems = [
+  const isValidador = sessionUser?.role === 'VALIDADOR'
+  const assignedEventId = sessionUser?.assignedEventId
+
+  let navItems = [
     { href: '/admin', label: 'Inicio', icon: LayoutDashboard },
     { href: '/admin/events', label: 'Eventos', icon: Calendar },
     { href: '/admin/import', label: 'Importar PILI', icon: Upload },
     { href: '/admin/users', label: 'Usuarios', icon: Users },
     { href: '/admin/settings', label: 'Configuración', icon: Settings },
   ]
+
+  if (isValidador) {
+    if (assignedEventId) {
+      navItems = [
+        { href: `/admin/events/${assignedEventId}/scanner`, label: 'Escáner QR Asignado', icon: QrCode },
+        { href: `/admin/events/${assignedEventId}`, label: 'Ver Mi Evento', icon: Calendar },
+      ]
+    } else {
+      navItems = [
+        { href: '/admin', label: 'Inicio', icon: LayoutDashboard },
+        { href: '/admin/events', label: 'Eventos', icon: Calendar },
+      ]
+    }
+  } else if (sessionUser?.role === 'AUXILIAR' || sessionUser?.role === 'CONSULTA') {
+    navItems = [
+      { href: '/admin', label: 'Inicio', icon: LayoutDashboard },
+      { href: '/admin/events', label: 'Eventos', icon: Calendar },
+    ]
+  }
 
   return (
     <div className="layout-admin">

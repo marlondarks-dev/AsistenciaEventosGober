@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { Mail, Lock, Eye, EyeOff, LogIn, AlertCircle, ArrowLeft, ShieldCheck } from 'lucide-react'
+import { Mail, Lock, Eye, EyeOff, LogIn, AlertCircle, ArrowLeft, ShieldCheck, Key, X, CheckCircle2, Sparkles, HelpCircle } from 'lucide-react'
 
 export default function LoginPage() {
   const router = useRouter()
@@ -12,6 +12,49 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Estados para recuperación de contraseña
+  const [showForgotModal, setShowForgotModal] = useState(false)
+  const [resetEmail, setResetEmail] = useState('')
+  const [resetPin, setResetPin] = useState('')
+  const [newResetPassword, setNewResetPassword] = useState('')
+  const [showResetPassword, setShowResetPassword] = useState(false)
+  const [resetLoading, setResetLoading] = useState(false)
+  const [forgotError, setForgotError] = useState<string | null>(null)
+  const [forgotSuccess, setForgotSuccess] = useState<string | null>(null)
+
+  const handleResetSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setForgotError(null)
+    setForgotSuccess(null)
+    setResetLoading(true)
+
+    try {
+      const res = await fetch('/api/auth/reset-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: resetEmail,
+          masterPin: resetPin,
+          newPassword: newResetPassword
+        })
+      })
+
+      const data = await res.json()
+
+      if (!res.ok) {
+        throw new Error(data.error || 'Error al restablecer la contraseña.')
+      }
+
+      setForgotSuccess(data.message || '¡Contraseña restablecida exitosamente!')
+      setEmail(resetEmail)
+      setPassword(newResetPassword)
+    } catch (err: any) {
+      setForgotError(err.message || 'Error al conectar con el servidor')
+    } finally {
+      setResetLoading(false)
+    }
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -31,9 +74,10 @@ export default function LoginPage() {
         throw new Error(data.error || 'Credenciales inválidas.')
       }
 
-      // Check if redirect query param exists
+      // If redirect query param exists, use it; otherwise, if user has an assigned event, go straight to its scanner
       const searchParams = new URLSearchParams(window.location.search)
-      const redirectUrl = searchParams.get('redirect') || '/admin'
+      const explicitRedirect = searchParams.get('redirect')
+      const redirectUrl = explicitRedirect || (data.user?.assignedEventId ? `/admin/events/${data.user.assignedEventId}/scanner` : '/admin')
       
       router.push(redirectUrl)
       router.refresh()
@@ -225,6 +269,31 @@ export default function LoginPage() {
             </div>
           </div>
 
+          {/* Olvidaste tu contraseña */}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '-0.45rem' }}>
+            <button
+              type="button"
+              onClick={() => {
+                setShowForgotModal(true)
+                setForgotError(null)
+                setForgotSuccess(null)
+                setResetEmail(email || '')
+              }}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#2563EB',
+                fontSize: '0.78rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+                padding: 0,
+                textDecoration: 'underline'
+              }}
+            >
+              ¿Olvidaste tu contraseña?
+            </button>
+          </div>
+
           <button
             type="submit"
             disabled={loading}
@@ -254,6 +323,225 @@ export default function LoginPage() {
           © 2026 Gobernación de Norte de Santander
         </div>
       </div>
+
+      {/* MODAL RECUPERACIÓN DE CONTRASEÑA */}
+      {showForgotModal && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          zIndex: 9999,
+          backgroundColor: 'rgba(15, 23, 42, 0.7)',
+          backdropFilter: 'blur(5px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '1.25rem'
+        }}>
+          <div style={{
+            backgroundColor: '#FFFFFF',
+            borderRadius: '20px',
+            maxWidth: '480px',
+            width: '100%',
+            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.35)',
+            border: '1px solid #E2E8F0',
+            overflow: 'hidden',
+            textAlign: 'left'
+          }}>
+            {/* Modal Header */}
+            <div style={{
+              padding: '1.25rem 1.5rem',
+              backgroundColor: '#F8FAFC',
+              borderBottom: '1px solid #E2E8F0',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                <div style={{ width: '36px', height: '36px', borderRadius: '10px', backgroundColor: '#EFF6FF', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <Key size={20} color="#2563EB" />
+                </div>
+                <div>
+                  <h3 style={{ fontSize: '1.05rem', fontWeight: 800, color: '#0F172A', margin: 0 }}>
+                    Recuperación de Contraseña
+                  </h3>
+                  <p style={{ margin: 0, fontSize: '0.75rem', color: '#64748B' }}>
+                    Opciones de restablecimiento para el equipo
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowForgotModal(false)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94A3B8' }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Modal Content */}
+            <div style={{ padding: '1.5rem', maxHeight: '80vh', overflowY: 'auto' }}>
+              
+              {/* Opción 1: Validadores / Operadores en campo */}
+              <div style={{
+                backgroundColor: '#F0FDF4',
+                border: '1px solid #BBF7D0',
+                borderRadius: '12px',
+                padding: '1rem',
+                marginBottom: '1.25rem'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontWeight: 700, fontSize: '0.85rem', color: '#166534', marginBottom: '0.35rem' }}>
+                  <HelpCircle size={17} color="#16A34A" />
+                  <span>¿Eres Operador de Escáner o Validador?</span>
+                </div>
+                <p style={{ margin: 0, fontSize: '0.78rem', color: '#14532D', lineHeight: 1.45 }}>
+                  Por seguridad, si olvidaste tu clave en el lugar del evento, <strong>contacta a tu Coordinador o Administrador</strong>. Él puede restablecer tu contraseña inmediatamente desde el panel y enviártela por WhatsApp.
+                </p>
+              </div>
+
+              {/* Opción 2: Formulario de Restablecimiento con PIN Maestro */}
+              <div style={{
+                backgroundColor: '#F8FAFC',
+                border: '1px solid #E2E8F0',
+                borderRadius: '12px',
+                padding: '1.1rem'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontWeight: 700, fontSize: '0.85rem', color: '#1E293B', marginBottom: '0.75rem' }}>
+                  <ShieldCheck size={17} color="#2563EB" />
+                  <span>Restablecimiento con PIN Maestro (Administradores)</span>
+                </div>
+
+                <form onSubmit={handleResetSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: '#334155', marginBottom: '0.25rem' }}>
+                      Correo Registrado *
+                    </label>
+                    <input
+                      type="email"
+                      required
+                      value={resetEmail}
+                      onChange={e => setResetEmail(e.target.value)}
+                      placeholder="admin@gobernacion.gov.co"
+                      style={{
+                        width: '100%',
+                        padding: '0.55rem 0.75rem',
+                        fontSize: '0.85rem',
+                        borderRadius: '8px',
+                        border: '1px solid #CBD5E1',
+                        backgroundColor: '#FFFFFF'
+                      }}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: '#334155', marginBottom: '0.25rem' }}>
+                      PIN Maestro de Seguridad *
+                    </label>
+                    <input
+                      type="password"
+                      required
+                      value={resetPin}
+                      onChange={e => setResetPin(e.target.value)}
+                      placeholder="PIN Maestro (ej. Gober2026*)"
+                      style={{
+                        width: '100%',
+                        padding: '0.55rem 0.75rem',
+                        fontSize: '0.85rem',
+                        borderRadius: '8px',
+                        border: '1px solid #CBD5E1',
+                        backgroundColor: '#FFFFFF'
+                      }}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: '#334155', marginBottom: '0.25rem' }}>
+                      Nueva Contraseña *
+                    </label>
+                    <div style={{ position: 'relative' }}>
+                      <input
+                        type={showResetPassword ? 'text' : 'password'}
+                        required
+                        value={newResetPassword}
+                        onChange={e => setNewResetPassword(e.target.value)}
+                        placeholder="Mínimo 4 caracteres..."
+                        style={{
+                          width: '100%',
+                          padding: '0.55rem 2.25rem 0.55rem 0.75rem',
+                          fontSize: '0.85rem',
+                          borderRadius: '8px',
+                          border: '1px solid #CBD5E1',
+                          backgroundColor: '#FFFFFF'
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowResetPassword(!showResetPassword)}
+                        style={{
+                          position: 'absolute',
+                          right: '0.6rem',
+                          top: '50%',
+                          transform: 'translateY(-50%)',
+                          background: 'none',
+                          border: 'none',
+                          cursor: 'pointer',
+                          color: '#94A3B8'
+                        }}
+                      >
+                        {showResetPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                      </button>
+                    </div>
+                  </div>
+
+                  {forgotError && (
+                    <div style={{ backgroundColor: '#FEF2F2', border: '1px solid #FECACA', borderRadius: '8px', padding: '0.6rem 0.75rem', color: '#DC2626', fontSize: '0.78rem' }}>
+                      {forgotError}
+                    </div>
+                  )}
+
+                  {forgotSuccess && (
+                    <div style={{ backgroundColor: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: '8px', padding: '0.6rem 0.75rem', color: '#166534', fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                      <CheckCircle2 size={16} color="#16A34A" />
+                      <span>{forgotSuccess}</span>
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.25rem' }}>
+                    <button
+                      type="submit"
+                      disabled={resetLoading}
+                      className="btn btn-primary"
+                      style={{
+                        flex: 1,
+                        padding: '0.6rem',
+                        fontSize: '0.82rem',
+                        fontWeight: 700,
+                        backgroundColor: '#2563EB',
+                        borderRadius: '8px',
+                        justifyContent: 'center'
+                      }}
+                    >
+                      {resetLoading ? 'Verificando...' : 'Restablecer mi Contraseña'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+
+            </div>
+
+            {/* Modal Footer */}
+            <div style={{ padding: '0.85rem 1.5rem', backgroundColor: '#F8FAFC', borderTop: '1px solid #E2E8F0', display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={() => setShowForgotModal(false)}
+                className="btn btn-outline"
+                style={{ fontSize: '0.82rem', padding: '0.45rem 1rem' }}
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

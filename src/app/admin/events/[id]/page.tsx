@@ -7,6 +7,7 @@ import DeleteEventButton from './DeleteEventButton'
 import RegistrationsTable from './RegistrationsTable'
 import MunicipalityQuotaManager from './MunicipalityQuotaManager'
 import EmailAccessManager from './EmailAccessManager'
+import EventCheckpointsManager from './EventCheckpointsManager'
 import EventMetricsCards from './EventMetricsCards'
 
 export const instant = false
@@ -44,11 +45,15 @@ export default async function EventDetailPage({ params }: { params: Promise<{ id
   let municipalityQuotas: Record<string, number> = {}
   let restrictedByEmail = false
   let allowedEmails: string[] = []
+  let checkpoints: string[] = ['Ingreso']
+  let dailySchedule: any = null
   try {
     const parsed = event.requiredFields ? JSON.parse(event.requiredFields) : {}
     municipalityQuotas = parsed.municipalityQuotas || {}
     restrictedByEmail = Boolean(parsed.restrictedByEmail)
     allowedEmails = Array.isArray(parsed.allowedEmails) ? parsed.allowedEmails : []
+    checkpoints = Array.isArray(parsed.checkpoints) ? parsed.checkpoints : ['Ingreso']
+    dailySchedule = parsed.dailySchedule || null
   } catch (e) {}
 
   // Calculate checkpoints stats
@@ -106,6 +111,16 @@ export default async function EventDetailPage({ params }: { params: Promise<{ id
         initialCheckpoints={checkpointStats}
       />
 
+      {/* CHECKPOINTS & DAILY MEALS SCHEDULE MANAGER */}
+      <div style={{ marginBottom: '1.25rem' }}>
+        <EventCheckpointsManager
+          eventId={event.id}
+          eventName={event.name}
+          initialCheckpoints={checkpoints}
+          initialDailySchedule={dailySchedule}
+        />
+      </div>
+
       {/* EMAIL ACCESS CONTROL (WHITELIST) MANAGER */}
       <div style={{ marginBottom: '1.25rem' }}>
         <EmailAccessManager
@@ -138,14 +153,14 @@ export default async function EventDetailPage({ params }: { params: Promise<{ id
           
           {event.registrations.length > 0 && (
             <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-              <Link href={`/admin/events/${event.id}/report`} target="_blank" className="btn btn-outline" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', backgroundColor: '#FEF2F2', borderColor: '#FECACA', color: '#DC2626', fontSize: '0.85rem', padding: '0.5rem 0.85rem' }}>
+              <Link href={`/admin/events/${event.id}/report`} target="_blank" className="btn btn-outline" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', backgroundColor: '#EFF6FF', borderColor: '#BFDBFE', color: '#1D4ED8', fontSize: '0.85rem', padding: '0.5rem 0.85rem', fontWeight: 700 }}>
                 <FileSpreadsheet size={16} />
                 Generar Fichas (PDF)
               </Link>
-              <Link href={`/api/events/${event.id}/export`} target="_blank" className="btn btn-outline" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem', padding: '0.5rem 0.85rem' }}>
+              <a href={`/api/events/${event.id}/export`} download="Reporte_Participantes.xlsx" className="btn btn-outline" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem', padding: '0.5rem 0.85rem', fontWeight: 700, textDecoration: 'none' }}>
                 <FileSpreadsheet size={16} color="var(--success)" />
-                Exportar a Excel
-              </Link>
+                Descargar Base de Datos (Excel)
+              </a>
             </div>
           )}
         </div>
@@ -154,6 +169,7 @@ export default async function EventDetailPage({ params }: { params: Promise<{ id
         <RegistrationsTable 
           eventId={event.id} 
           initialRegistrations={event.registrations} 
+          eventRequiredFields={event.requiredFields}
         />
       </div>
     </div>

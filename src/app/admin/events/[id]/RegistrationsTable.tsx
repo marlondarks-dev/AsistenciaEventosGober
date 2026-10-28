@@ -19,7 +19,14 @@ import {
   MapPin, 
   UploadCloud,
   Filter,
-  RotateCw
+  RotateCw,
+  Eye,
+  FileText,
+  Download,
+  ExternalLink,
+  Paperclip,
+  CheckCircle2,
+  AlertTriangle
 } from 'lucide-react'
 
 const MUNICIPIOS_NDS = [
@@ -29,28 +36,116 @@ const MUNICIPIOS_NDS = [
   'San Calixto', 'San Cayetano', 'Santiago', 'Sardinata', 'Silos', 'Teorama', 'Tibú', 'Toledo', 'Villa Caro', 'Villa del Rosario'
 ]
 
+export interface AttachedDoc {
+  id: string
+  label: string
+  url: string | null
+  isConsent: boolean
+  type: string
+}
+
 export default function RegistrationsTable({ 
   eventId, 
-  initialRegistrations 
+  initialRegistrations,
+  eventRequiredFields = "{}"
 }: { 
   eventId: string, 
-  initialRegistrations: any[] 
+  initialRegistrations: any[],
+  eventRequiredFields?: string
 }) {
   const router = useRouter()
   const [registrations, setRegistrations] = useState(initialRegistrations)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'ASISTIO' | 'REGISTRADO' | 'CANCELADO'>('ALL')
+  const [kitFilter, setKitFilter] = useState<'ALL' | 'WITH_KIT' | 'WITHOUT_KIT'>('ALL')
   
   // Modals state
+  const [viewingReg, setViewingReg] = useState<any | null>(null)
   const [editingReg, setEditingReg] = useState<any | null>(null)
   const [deletingReg, setDeletingReg] = useState<any | null>(null)
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [exportingExcel, setExportingExcel] = useState(false)
   const [toast, setToast] = useState<{ type: 'success' | 'error', text: string } | null>(null)
   
-  // Upload photo inside edit modal
+  // Upload states inside modal
   const [uploadingModalPhoto, setUploadingModalPhoto] = useState(false)
+  const [uploadingDocId, setUploadingDocId] = useState<string | null>(null)
   const fileInputModalRef = useRef<HTMLInputElement>(null)
+
+  // Parse custom questions from event
+  const customQuestions = useMemo(() => {
+    try {
+      const parsed = eventRequiredFields ? JSON.parse(eventRequiredFields) : {}
+      return Array.isArray(parsed.customQuestions) ? parsed.customQuestions : []
+    } catch (e) {
+      return []
+    }
+  }, [eventRequiredFields])
+
+  // Helper to extract all attached documents & consent from a registration
+  const getParticipantDocs = (reg: any): AttachedDoc[] => {
+    let addData: Record<string, any> = {}
+    try {
+      addData = JSON.parse(reg.person?.additionalData || '{}')
+    } catch (e) {}
+
+    const docs: AttachedDoc[] = []
+    const processedKeys = new Set<string>()
+
+    // 1. Check known custom questions (especially type file/pdf/image or labels mentioning consentimiento/autorizacion)
+    customQuestions.forEach((q: any) => {
+      const isFileQuestion = q.type === 'file' || q.type === 'pdf' || q.type === 'image'
+      const labelLower = (q.label || '').toLowerCase()
+      const isConsentKeyword = labelLower.includes('consentimiento') || labelLower.includes('autoriza') || labelLower.includes('compromiso')
+
+      if (isFileQuestion || isConsentKeyword) {
+        processedKeys.add(q.id)
+        const val = addData[q.id]
+        docs.push({
+          id: q.id,
+          label: q.label || 'Documento Adjunto',
+          url: typeof val === 'string' && val.trim() ? val.trim() : null,
+          isConsent: isConsentKeyword,
+          type: q.type || 'file'
+        })
+      }
+    })
+
+    // 2. Scan for any other uploaded files/urls in additionalData (excluding face photos)
+    Object.entries(addData).forEach(([key, val]) => {
+      if (processedKeys.has(key)) return
+      if (key === 'foto' || key === 'fotoIngreso') return
+
+      if (typeof val === 'string' && val.trim()) {
+        const valTrimmed = val.trim()
+        const isUrl = valTrimmed.startsWith('/') || valTrimmed.startsWith('http') || /\.(pdf|png|jpe?g|webp|docx?)$/i.test(valTrimmed)
+        const keyLower = key.toLowerCase()
+        const isConsent = keyLower.includes('consentimiento') || keyLower.includes('autoriza') || keyLower.includes('compromiso')
+
+        if (isUrl || isConsent) {
+          let label = key
+          if (key === 'consentimiento') label = 'Consentimiento Informado'
+          else if (key === 'autorizacion') label = 'Autorización'
+          else if (key === 'compromiso') label = 'Compromiso de Convivencia'
+          else {
+            const q = customQuestions.find((item: any) => item.id === key)
+            if (q && q.label) label = q.label
+          }
+
+          docs.push({
+            id: key,
+            label,
+            url: isUrl ? valTrimmed : null,
+            isConsent,
+            type: 'file'
+          })
+        }
+      }
+    })
+
+    return docs
+  }
 
   const showToast = (type: 'success' | 'error', text: string) => {
     setToast({ type, text })
@@ -108,11 +203,40 @@ export default function RegistrationsTable({
     return () => clearInterval(interval)
   }, [eventId, autoRefresh, editingReg, deletingReg])
 
+  // Helper to detect if a checkpoint is for Kit
+  const isKitName = (name: string): boolean => {
+    if (!name) return false
+    const lower = name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    return lower.includes('kit') || lower.includes('bienvenida')
+  }
+
+  // Helper to extract kit scan
+  const getKitScan = (reg: any) => {
+    if (!reg?.checkpoints) return null
+    try {
+      const cps = typeof reg.checkpoints === 'string' ? JSON.parse(reg.checkpoints) : reg.checkpoints
+      if (!Array.isArray(cps)) return null
+      return cps.find((c: any) => isKitName(c?.name)) || null
+    } catch {
+      return null
+    }
+  }
+
+  const hasKit = (reg: any): boolean => !!getKitScan(reg)
+
   // Filter registrations
   const filtered = useMemo(() => {
     return registrations.filter(r => {
       // Status filter
       if (statusFilter !== 'ALL' && r.status !== statusFilter) {
+        return false
+      }
+
+      // Kit filter
+      if (kitFilter === 'WITH_KIT' && !hasKit(r)) {
+        return false
+      }
+      if (kitFilter === 'WITHOUT_KIT' && (hasKit(r) || r.status === 'CANCELADO')) {
         return false
       }
 
@@ -127,13 +251,117 @@ export default function RegistrationsTable({
 
       return fullName.includes(q) || doc.includes(q) || mun.includes(q)
     })
-  }, [registrations, search, statusFilter])
+  }, [registrations, search, statusFilter, kitFilter])
 
   // Count stats
   const totalCount = registrations.length
   const attendedCount = registrations.filter(r => r.status === 'ASISTIO').length
   const registeredCount = registrations.filter(r => r.status === 'REGISTRADO').length
   const cancelledCount = registrations.filter(r => r.status === 'CANCELADO').length
+  const kitDeliveredCount = registrations.filter(r => hasKit(r)).length
+  const kitPendingCount = registrations.filter(r => !hasKit(r) && r.status !== 'CANCELADO').length
+
+  // Toggle kit delivery or remove kit checkpoint
+  const handleToggleKit = async (reg: any, deliver: boolean) => {
+    let cps: any[] = []
+    try {
+      cps = typeof reg.checkpoints === 'string' ? JSON.parse(reg.checkpoints || '[]') : (reg.checkpoints || [])
+      if (!Array.isArray(cps)) cps = []
+    } catch {
+      cps = []
+    }
+
+    if (deliver) {
+      if (cps.some((c: any) => isKitName(c.name))) {
+        showToast('error', 'Este participante ya tiene el kit registrado.')
+        return
+      }
+
+      const now = new Date()
+      const nowColombia = now.toLocaleString('es-CO', { 
+        timeZone: 'America/Bogota',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true
+      })
+
+      cps.push({
+        name: 'Kit de Bienvenida',
+        timestamp: now.toISOString(),
+        horaColombia: nowColombia,
+        attendedBy: 'Administrador (Panel)',
+        evidenceUrl: null
+      })
+    } else {
+      const pName = `${reg.person?.firstName || ''} ${reg.person?.lastName || ''}`.trim()
+      if (!confirm(`¿Desea desmarcar o retirar el Kit de Bienvenida para "${pName}"?`)) {
+        return
+      }
+      cps = cps.filter((c: any) => !isKitName(c.name))
+    }
+
+    try {
+      const res = await fetch(`/api/registrations/${reg.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ checkpoints: JSON.stringify(cps) })
+      })
+
+      if (!res.ok) throw new Error('Error al actualizar el estado del kit')
+
+      setRegistrations(prev => prev.map(r => r.id === reg.id ? { ...r, checkpoints: JSON.stringify(cps) } : r))
+      if (viewingReg && viewingReg.id === reg.id) {
+        setViewingReg({ ...viewingReg, checkpoints: JSON.stringify(cps) })
+      }
+      showToast('success', deliver ? '¡Kit de Bienvenida marcado como entregado!' : 'Kit de Bienvenida desmarcado exitosamente.')
+      fetchLiveRegistrations(false)
+    } catch (err: any) {
+      showToast('error', err.message || 'Error al actualizar el kit')
+    }
+  }
+
+  // Remove individual checkpoint (e.g. duplicate meal or kit)
+  const handleRemoveCheckpoint = async (regId: string, indexToRemove: number) => {
+    const reg = registrations.find(r => r.id === regId)
+    if (!reg) return
+
+    let cps: any[] = []
+    try {
+      cps = typeof reg.checkpoints === 'string' ? JSON.parse(reg.checkpoints || '[]') : (reg.checkpoints || [])
+    } catch {
+      cps = []
+    }
+
+    const target = cps[indexToRemove]
+    if (!confirm(`¿Eliminar la entrega de "${target?.name || 'este punto'}"? Esta acción no se puede deshacer.`)) {
+      return
+    }
+
+    const updatedCps = cps.filter((_, idx) => idx !== indexToRemove)
+
+    try {
+      const res = await fetch(`/api/registrations/${regId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ checkpoints: JSON.stringify(updatedCps) })
+      })
+
+      if (!res.ok) throw new Error('Error al eliminar entrega')
+
+      setRegistrations(prev => prev.map(r => r.id === regId ? { ...r, checkpoints: JSON.stringify(updatedCps) } : r))
+      if (viewingReg && viewingReg.id === regId) {
+        setViewingReg({ ...viewingReg, checkpoints: JSON.stringify(updatedCps) })
+      }
+      showToast('success', 'Entrega eliminada correctamente.')
+      fetchLiveRegistrations(false)
+    } catch (err: any) {
+      showToast('error', err.message || 'Error al eliminar entrega')
+    }
+  }
 
   // Open Edit Modal with prepared state
   const handleOpenEdit = (reg: any) => {
@@ -150,6 +378,8 @@ export default function RegistrationsTable({
         if (cp) photoUrl = cp.evidenceUrl
       } catch (e) {}
     }
+
+    const docs = getParticipantDocs(reg)
 
     setEditingReg({
       id: reg.id,
@@ -172,7 +402,61 @@ export default function RegistrationsTable({
       discapacidad: addData.discapacidad || '',
       grupoEtnico: addData.grupoEtnico || '',
       victima: addData.victima || '',
-      fotoIngreso: photoUrl
+      fotoIngreso: photoUrl,
+      docs,
+      customAnswers: addData
+    })
+  }
+
+  // Upload or replace attached document inside edit modal
+  const handleUploadDocument = async (docId: string, file: File) => {
+    if (!editingReg) return
+    setUploadingDocId(docId)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await fetch('/api/upload', { method: 'POST', body: fd })
+      const json = await res.json()
+      if (json.url) {
+        setEditingReg((prev: any) => {
+          const updatedCustomAnswers = {
+            ...(prev.customAnswers || {}),
+            [docId]: json.url
+          }
+          const updatedDocs = (prev.docs || []).map((d: any) => 
+            d.id === docId ? { ...d, url: json.url } : d
+          )
+          return {
+            ...prev,
+            customAnswers: updatedCustomAnswers,
+            docs: updatedDocs
+          }
+        })
+        showToast('success', 'Documento adjunto subido correctamente.')
+      } else {
+        throw new Error('Error al guardar el archivo')
+      }
+    } catch (err: any) {
+      showToast('error', err.message || 'Error al subir el archivo')
+    } finally {
+      setUploadingDocId(null)
+    }
+  }
+
+  // Remove attached document from edit modal
+  const handleRemoveDocument = (docId: string) => {
+    if (!editingReg) return
+    setEditingReg((prev: any) => {
+      const updatedCustomAnswers = { ...(prev.customAnswers || {}) }
+      delete updatedCustomAnswers[docId]
+      const updatedDocs = (prev.docs || []).map((d: any) => 
+        d.id === docId ? { ...d, url: null } : d
+      )
+      return {
+        ...prev,
+        customAnswers: updatedCustomAnswers,
+        docs: updatedDocs
+      }
     })
   }
 
@@ -230,6 +514,46 @@ export default function RegistrationsTable({
       showToast('error', err.message || 'Error al eliminar el registro')
     } finally {
       setDeleting(false)
+    }
+  }
+
+  // Handle direct Excel database download
+  const handleExportExcel = async () => {
+    try {
+      setExportingExcel(true)
+      showToast('success', 'Generando y descargando base de datos Excel...')
+      
+      const res = await fetch(`/api/events/${eventId}/export`)
+      if (!res.ok) {
+        let errMessage = 'Error al exportar base de datos'
+        try {
+          const errData = await res.json()
+          if (errData?.error) errMessage = errData.error
+        } catch(e) {}
+        throw new Error(errMessage)
+      }
+
+      const blob = await res.blob()
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      const disposition = res.headers.get('Content-Disposition')
+      let filename = 'Reporte_Participantes.xlsx'
+      if (disposition && disposition.includes('filename=')) {
+        const match = disposition.match(/filename="?([^";]+)"?/)
+        if (match && match[1]) filename = match[1]
+      }
+      a.download = filename
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      window.URL.revokeObjectURL(url)
+      showToast('success', 'Base de datos descargada correctamente en formato Excel.')
+    } catch (err: any) {
+      console.error('Error downloading excel:', err)
+      showToast('error', err.message || 'No se pudo descargar la base de datos.')
+    } finally {
+      setExportingExcel(false)
     }
   }
 
@@ -458,6 +782,143 @@ export default function RegistrationsTable({
             </button>
           )}
         </div>
+
+        {/* Kit de Bienvenida Filter Pills */}
+        <div style={{ 
+          display: 'flex', 
+          flexWrap: 'wrap', 
+          gap: '0.45rem', 
+          alignItems: 'center', 
+          width: '100%', 
+          paddingTop: '0.75rem', 
+          borderTop: '1px dashed #CBD5E1' 
+        }}>
+          <span style={{ fontSize: '0.8rem', fontWeight: 800, color: '#1E293B', marginRight: '0.35rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+            🎒 Filtro de Kit de Bienvenida:
+          </span>
+          <button
+            type="button"
+            onClick={() => setKitFilter('ALL')}
+            style={{
+              padding: '0.35rem 0.8rem',
+              borderRadius: '20px',
+              fontSize: '0.8rem',
+              fontWeight: 700,
+              cursor: 'pointer',
+              border: kitFilter === 'ALL' ? '2px solid #6366F1' : '1px solid #CBD5E1',
+              backgroundColor: kitFilter === 'ALL' ? '#EEF2FF' : '#FFFFFF',
+              color: kitFilter === 'ALL' ? '#4F46E5' : '#475569'
+            }}
+          >
+            Todos ({totalCount})
+          </button>
+          <button
+            type="button"
+            onClick={() => setKitFilter('WITH_KIT')}
+            style={{
+              padding: '0.35rem 0.8rem',
+              borderRadius: '20px',
+              fontSize: '0.8rem',
+              fontWeight: 700,
+              cursor: 'pointer',
+              border: kitFilter === 'WITH_KIT' ? '2px solid #16A34A' : '1px solid #CBD5E1',
+              backgroundColor: kitFilter === 'WITH_KIT' ? '#DCFCE7' : '#FFFFFF',
+              color: kitFilter === 'WITH_KIT' ? '#15803D' : '#475569'
+            }}
+          >
+            ✅ Recibieron Kit ({kitDeliveredCount})
+          </button>
+          <button
+            type="button"
+            onClick={() => setKitFilter('WITHOUT_KIT')}
+            style={{
+              padding: '0.35rem 0.8rem',
+              borderRadius: '20px',
+              fontSize: '0.8rem',
+              fontWeight: 700,
+              cursor: 'pointer',
+              border: kitFilter === 'WITHOUT_KIT' ? '2px solid #D97706' : '1px solid #CBD5E1',
+              backgroundColor: kitFilter === 'WITHOUT_KIT' ? '#FEF3C7' : '#FFFFFF',
+              color: kitFilter === 'WITHOUT_KIT' ? '#B45309' : '#475569'
+            }}
+          >
+            ⏳ Faltan por Kit ({kitPendingCount})
+          </button>
+
+          {/* Kit Delivery Summary Stats */}
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '0.75rem', fontSize: '0.78rem', color: '#64748B' }}>
+            <span>
+              Progreso: <strong style={{ color: '#0F172A' }}>{totalCount > 0 ? Math.round((kitDeliveredCount / totalCount) * 100) : 0}%</strong>
+            </span>
+            <span style={{ color: '#94A3B8' }}>•</span>
+            <span style={{ color: '#B45309', fontWeight: 700 }}>
+              Pendientes: {kitPendingCount}
+            </span>
+          </div>
+        </div>
+
+        {/* Quick Actions & Export Bar */}
+        <div style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '0.75rem',
+          width: '100%',
+          paddingTop: '0.75rem',
+          borderTop: '1px solid #E2E8F0'
+        }}>
+          <div style={{ fontSize: '0.82rem', color: '#64748B' }}>
+            Mostrando <strong>{filtered.length}</strong> de <strong>{totalCount}</strong> participantes registrados
+          </div>
+
+          <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', alignItems: 'center' }}>
+            <Link
+              href={`/admin/events/${eventId}/report`}
+              target="_blank"
+              className="btn btn-outline"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+                fontSize: '0.82rem',
+                fontWeight: 700,
+                padding: '0.45rem 0.85rem',
+                backgroundColor: '#EFF6FF',
+                borderColor: '#BFDBFE',
+                color: '#1D4ED8',
+                borderRadius: '8px',
+                textDecoration: 'none'
+              }}
+            >
+              <FileText size={15} />
+              <span>Generar Fichas (PDF)</span>
+            </Link>
+
+            <button
+              type="button"
+              onClick={handleExportExcel}
+              disabled={exportingExcel}
+              className="btn btn-outline"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+                fontSize: '0.82rem',
+                fontWeight: 700,
+                padding: '0.45rem 0.85rem',
+                backgroundColor: '#F0FDF4',
+                borderColor: '#BBF7D0',
+                color: '#15803D',
+                borderRadius: '8px',
+                cursor: exportingExcel ? 'not-allowed' : 'pointer'
+              }}
+            >
+              <Download size={15} style={{ animation: exportingExcel ? 'bounce 1s infinite' : 'none' }} />
+              <span>{exportingExcel ? 'Descargando...' : 'Descargar Base de Datos (Excel)'}</span>
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* RESULTS TABLE */}
@@ -480,6 +941,7 @@ export default function RegistrationsTable({
                 <th style={{ padding: '0.75rem 1rem', fontSize: '0.8rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase' }}>Documento</th>
                 <th style={{ padding: '0.75rem 1rem', fontSize: '0.8rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase' }}>Municipio & Contacto</th>
                 <th style={{ padding: '0.75rem 1rem', fontSize: '0.8rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase' }}>Estado</th>
+                <th style={{ padding: '0.75rem 1rem', fontSize: '0.8rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase' }}>🎒 Kit Bienvenida</th>
                 <th style={{ padding: '0.75rem 1rem', fontSize: '0.8rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase' }}>Inscripción</th>
                 <th style={{ padding: '0.75rem 1rem', fontSize: '0.8rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase', textAlign: 'center' }}>Acciones</th>
               </tr>
@@ -498,6 +960,8 @@ export default function RegistrationsTable({
                     if (ingresoCp) photoUrl = ingresoCp.evidenceUrl
                   }
                 } catch (e) {}
+
+                const docs = getParticipantDocs(reg)
 
                 const fullName = [reg.person.firstName, reg.person.middleName, reg.person.lastName, reg.person.secondLastName]
                   .filter(Boolean)
@@ -549,6 +1013,38 @@ export default function RegistrationsTable({
                               {reg.person.specialCondition === 'INDIGENTE' ? 'Habitante de calle' : reg.person.specialCondition}
                             </span>
                           )}
+
+                          {/* BADGES / PILLS DE DOCUMENTOS ADJUNTOS Y CONSENTIMIENTO */}
+                          {docs.length > 0 && docs.some(d => d.url) && (
+                            <div style={{ display: 'flex', gap: '0.3rem', marginTop: '0.3rem', flexWrap: 'wrap' }}>
+                              {docs.filter(d => d.url).map(d => (
+                                <a
+                                  key={d.id}
+                                  href={d.url!}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  onClick={e => e.stopPropagation()}
+                                  title={`Clic para ver: ${d.label}`}
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '0.2rem',
+                                    padding: '0.15rem 0.45rem',
+                                    borderRadius: '6px',
+                                    fontSize: '0.68rem',
+                                    fontWeight: 700,
+                                    backgroundColor: d.isConsent ? '#EFF6FF' : '#F0FDF4',
+                                    color: d.isConsent ? '#1D4ED8' : '#15803D',
+                                    border: `1px solid ${d.isConsent ? '#BFDBFE' : '#BBF7D0'}`,
+                                    textDecoration: 'none'
+                                  }}
+                                >
+                                  <Paperclip size={10} />
+                                  <span>{d.label.length > 22 ? d.label.substring(0, 19) + '...' : d.label}</span>
+                                </a>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       </div>
                     </td>
@@ -591,6 +1087,114 @@ export default function RegistrationsTable({
                       </span>
                     </td>
 
+                    {/* Kit de Bienvenida */}
+                    <td style={{ padding: '0.75rem 1rem' }}>
+                      {(() => {
+                        const kit = getKitScan(reg)
+                        if (kit) {
+                          const dateFormatted = new Date(kit.timestamp).toLocaleDateString('es-CO', {
+                            timeZone: 'America/Bogota',
+                            weekday: 'short',
+                            day: 'numeric',
+                            month: 'short'
+                          })
+                          const timeFormatted = new Date(kit.timestamp).toLocaleTimeString('es-CO', {
+                            timeZone: 'America/Bogota',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            hour12: true
+                          })
+                          return (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                              <span style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.35rem',
+                                padding: '0.25rem 0.65rem',
+                                borderRadius: '20px',
+                                fontSize: '0.75rem',
+                                fontWeight: 800,
+                                backgroundColor: '#DCFCE7',
+                                color: '#15803D',
+                                border: '1px solid #86EFAC',
+                                width: 'fit-content'
+                              }}>
+                                🎒 Entregado
+                              </span>
+                              <span style={{ fontSize: '0.72rem', color: '#64748B' }}>
+                                {dateFormatted} • {timeFormatted}
+                              </span>
+                              {kit.attendedBy && (
+                                <span style={{ fontSize: '0.68rem', color: '#94A3B8' }}>
+                                  Por: {kit.attendedBy}
+                                </span>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => handleToggleKit(reg, false)}
+                                style={{
+                                  background: 'none',
+                                  border: 'none',
+                                  color: '#EF4444',
+                                  fontSize: '0.68rem',
+                                  textDecoration: 'underline',
+                                  cursor: 'pointer',
+                                  padding: 0,
+                                  textAlign: 'left',
+                                  marginTop: '0.1rem',
+                                  width: 'fit-content'
+                                }}
+                                title="Desmarcar entrega de kit (por error o duplicado)"
+                              >
+                                Desmarcar
+                              </button>
+                            </div>
+                          )
+                        } else {
+                          return (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                              <span style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.35rem',
+                                padding: '0.25rem 0.65rem',
+                                borderRadius: '20px',
+                                fontSize: '0.75rem',
+                                fontWeight: 700,
+                                backgroundColor: '#FEF3C7',
+                                color: '#B45309',
+                                border: '1px solid #FDE68A',
+                                width: 'fit-content'
+                              }}>
+                                ⏳ Pendiente
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => handleToggleKit(reg, true)}
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '0.25rem',
+                                  backgroundColor: '#EFF6FF',
+                                  border: '1px solid #BFDBFE',
+                                  color: '#1D4ED8',
+                                  borderRadius: '6px',
+                                  padding: '0.2rem 0.5rem',
+                                  fontSize: '0.72rem',
+                                  fontWeight: 700,
+                                  cursor: 'pointer',
+                                  width: 'fit-content'
+                                }}
+                                title="Marcar kit de bienvenida entregado"
+                              >
+                                + Marcar Kit
+                              </button>
+                            </div>
+                          )
+                        }
+                      })()}
+                    </td>
+
                     {/* Fecha Registro */}
                     <td style={{ padding: '0.75rem 1rem', fontSize: '0.8rem', color: '#64748B' }}>
                       {new Date(reg.registeredAt).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' })}
@@ -598,8 +1202,31 @@ export default function RegistrationsTable({
 
                     {/* Acciones */}
                     <td style={{ padding: '0.75rem 1rem', textAlign: 'center' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem' }}>
                         
+                        {/* Ver Ficha Completa y Documentos */}
+                        <button
+                          type="button"
+                          onClick={() => setViewingReg(reg)}
+                          title="Ver Ficha y Documentos Adjuntos"
+                          style={{
+                            padding: '0.4rem 0.65rem',
+                            backgroundColor: '#F0FDF4',
+                            border: '1px solid #BBF7D0',
+                            borderRadius: '6px',
+                            color: '#15803D',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.25rem',
+                            fontSize: '0.75rem',
+                            fontWeight: 700,
+                            cursor: 'pointer'
+                          }}
+                        >
+                          <Eye size={14} />
+                          <span>Ver</span>
+                        </button>
+
                         {/* Sticker */}
                         <Link 
                           href={`/event/${eventId}/sticker/${reg.id}`} 
@@ -624,11 +1251,35 @@ export default function RegistrationsTable({
                           <span>QR</span>
                         </Link>
 
+                        {/* Ficha Individual (PDF) */}
+                        <Link 
+                          href={`/admin/events/${eventId}/report?search=${encodeURIComponent(reg.person?.documentNumber || reg.id)}`} 
+                          target="_blank"
+                          title="Ver e Imprimir Ficha de Asistencia (PDF)"
+                          style={{
+                            padding: '0.4rem 0.6rem',
+                            backgroundColor: '#F0FDF4',
+                            border: '1px solid #BBF7D0',
+                            borderRadius: '6px',
+                            color: '#15803D',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.25rem',
+                            fontSize: '0.75rem',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            textDecoration: 'none'
+                          }}
+                        >
+                          <FileText size={14} color="#16A34A" />
+                          <span>Ficha</span>
+                        </Link>
+
                         {/* Editar */}
                         <button
                           type="button"
                           onClick={() => handleOpenEdit(reg)}
-                          title="Editar Participante"
+                          title="Editar Participante y Adjuntos"
                           style={{
                             padding: '0.4rem 0.6rem',
                             backgroundColor: '#EFF6FF',
@@ -1063,6 +1714,131 @@ export default function RegistrationsTable({
                 </div>
               </div>
 
+              {/* SECCIÓN 3: DOCUMENTOS ADJUNTOS Y CONSENTIMIENTO INFORMADO */}
+              <div>
+                <h4 style={{ fontSize: '0.85rem', fontWeight: 800, color: '#334155', textTransform: 'uppercase', marginBottom: '0.75rem', borderBottom: '1px solid #E2E8F0', paddingBottom: '0.35rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  <Paperclip size={16} color="#2563EB" />
+                  <span>3. Documentos Adjuntos y Consentimiento Informado</span>
+                </h4>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                  {editingReg.docs && editingReg.docs.length > 0 ? (
+                    editingReg.docs.map((doc: any) => {
+                      const isUploading = uploadingDocId === doc.id
+                      const hasFile = Boolean(doc.url)
+
+                      return (
+                        <div 
+                          key={doc.id}
+                          style={{
+                            backgroundColor: hasFile ? '#F0FDF4' : '#FFFBEB',
+                            border: `1.5px solid ${hasFile ? '#86EFAC' : '#FCD34D'}`,
+                            borderRadius: '10px',
+                            padding: '0.85rem 1rem',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: '1rem',
+                            flexWrap: 'wrap'
+                          }}
+                        >
+                          <div style={{ flex: 1, minWidth: '200px' }}>
+                            <div style={{ fontWeight: 800, fontSize: '0.9rem', color: '#0F172A', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                              <FileText size={16} color={hasFile ? '#16A34A' : '#D97706'} />
+                              <span>{doc.label}</span>
+                              {doc.isConsent && (
+                                <span style={{ fontSize: '0.65rem', backgroundColor: '#DBEAFE', color: '#1E40AF', padding: '0.1rem 0.35rem', borderRadius: '4px' }}>
+                                  Consentimiento
+                                </span>
+                              )}
+                            </div>
+                            <div style={{ fontSize: '0.75rem', color: hasFile ? '#15803D' : '#B45309', marginTop: '0.2rem', fontWeight: 600 }}>
+                              {hasFile ? `✅ Archivo cargado (${doc.url.split('/').pop()})` : '⚠️ Sin archivo adjunto'}
+                            </div>
+                          </div>
+
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                            {hasFile && (
+                              <a
+                                href={doc.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="btn btn-outline"
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '0.25rem',
+                                  padding: '0.35rem 0.65rem',
+                                  fontSize: '0.75rem',
+                                  fontWeight: 700,
+                                  backgroundColor: '#FFFFFF',
+                                  color: '#1D4ED8',
+                                  borderColor: '#BFDBFE',
+                                  textDecoration: 'none'
+                                }}
+                              >
+                                <Eye size={13} />
+                                <span>Ver Archivo</span>
+                              </a>
+                            )}
+
+                            <label
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.25rem',
+                                padding: '0.35rem 0.65rem',
+                                fontSize: '0.75rem',
+                                fontWeight: 700,
+                                backgroundColor: '#2563EB',
+                                color: '#FFFFFF',
+                                borderRadius: '6px',
+                                cursor: isUploading ? 'not-allowed' : 'pointer'
+                              }}
+                            >
+                              <UploadCloud size={13} />
+                              <span>{isUploading ? 'Subiendo...' : (hasFile ? 'Reemplazar' : 'Subir Archivo')}</span>
+                              <input
+                                type="file"
+                                accept=".pdf,.png,.jpg,.jpeg,.doc,.docx"
+                                style={{ display: 'none' }}
+                                disabled={isUploading}
+                                onChange={(e) => {
+                                  const file = e.target.files?.[0]
+                                  if (file) handleUploadDocument(doc.id, file)
+                                }}
+                              />
+                            </label>
+
+                            {hasFile && (
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveDocument(doc.id)}
+                                style={{
+                                  background: 'none',
+                                  border: 'none',
+                                  color: '#DC2626',
+                                  cursor: 'pointer',
+                                  padding: '0.25rem',
+                                  fontSize: '0.75rem',
+                                  textDecoration: 'underline'
+                                }}
+                              >
+                                Quitar
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    })
+                  ) : (
+                    <p style={{ margin: 0, fontSize: '0.8rem', color: '#64748B' }}>
+                      No hay campos de documentos configurados para este evento.
+                    </p>
+                  )}
+                </div>
+              </div>
+
               {/* Modal Buttons */}
               <div style={{
                 marginTop: '1rem',
@@ -1103,6 +1879,517 @@ export default function RegistrationsTable({
           </div>
         </div>
       )}
+
+      {/* ================= VIEW PARTICIPANT & DOCUMENTS MODAL ================= */}
+      {viewingReg && (() => {
+        const docs = getParticipantDocs(viewingReg)
+        let addData: any = {}
+        try {
+          addData = JSON.parse(viewingReg.person?.additionalData || '{}')
+        } catch (e) {}
+
+        let photoUrl = addData.fotoIngreso || addData.foto || null
+        let cps: any[] = []
+        try {
+          cps = JSON.parse(viewingReg.checkpoints || '[]')
+          if (!photoUrl) {
+            const ingresoCp = cps.find((c: any) => c.name === 'Ingreso' && c.evidenceUrl)
+            if (ingresoCp) photoUrl = ingresoCp.evidenceUrl
+          }
+        } catch (e) {}
+
+        const fullName = [
+          viewingReg.person.firstName,
+          viewingReg.person.middleName,
+          viewingReg.person.lastName,
+          viewingReg.person.secondLastName
+        ].filter(Boolean).join(' ')
+
+        return (
+          <div style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(15, 23, 42, 0.75)',
+            backdropFilter: 'blur(4px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+            padding: '1rem'
+          }}>
+            <div className="animate-fade-in" style={{
+              backgroundColor: '#FFFFFF',
+              borderRadius: '16px',
+              maxWidth: '800px',
+              width: '100%',
+              maxHeight: '92vh',
+              display: 'flex',
+              flexDirection: 'column',
+              boxShadow: '0 25px 50px -12px rgba(0,0,0,0.5)',
+              overflow: 'hidden'
+            }}>
+              
+              {/* Modal Header */}
+              <div style={{
+                padding: '1.25rem 1.5rem',
+                borderBottom: '1px solid #E2E8F0',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                backgroundColor: '#F8FAFC'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
+                  {photoUrl ? (
+                    <img 
+                      src={photoUrl} 
+                      alt="Foto" 
+                      style={{ width: '48px', height: '48px', borderRadius: '10px', objectFit: 'cover', border: '2px solid #CBD5E1' }} 
+                    />
+                  ) : (
+                    <div style={{ width: '48px', height: '48px', borderRadius: '10px', backgroundColor: '#E2E8F0', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, color: '#64748B', fontSize: '1.1rem' }}>
+                      {viewingReg.person.firstName?.[0] || 'P'}
+                    </div>
+                  )}
+                  <div>
+                    <h3 style={{ fontSize: '1.25rem', fontWeight: 800, margin: 0, color: '#0F172A' }}>
+                      {fullName}
+                    </h3>
+                    <p style={{ fontSize: '0.8rem', color: '#64748B', margin: '0.15rem 0 0' }}>
+                      {viewingReg.person.documentType} {viewingReg.person.documentNumber} • ID: <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{viewingReg.id.slice(-8).toUpperCase()}</span>
+                    </p>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  <span style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.35rem',
+                    padding: '0.35rem 0.75rem',
+                    borderRadius: '20px',
+                    fontSize: '0.8rem',
+                    fontWeight: 800,
+                    backgroundColor: viewingReg.status === 'ASISTIO' ? '#DCFCE7' : viewingReg.status === 'REGISTRADO' ? '#DBEAFE' : '#FEE2E2',
+                    color: viewingReg.status === 'ASISTIO' ? '#15803D' : viewingReg.status === 'REGISTRADO' ? '#1E40AF' : '#B91C1C',
+                    border: `1px solid ${viewingReg.status === 'ASISTIO' ? '#86EFAC' : viewingReg.status === 'REGISTRADO' ? '#93C5FD' : '#FCA5A5'}`
+                  }}>
+                    {viewingReg.status === 'ASISTIO' ? <CheckCircle size={14} /> : <Clock size={14} />}
+                    {viewingReg.status}
+                  </span>
+
+                  <button
+                    type="button"
+                    onClick={() => setViewingReg(null)}
+                    style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#64748B', padding: '0.25rem' }}
+                  >
+                    <X size={24} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Modal Body */}
+              <div style={{ overflowY: 'auto', padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                
+                {/* SECCIÓN DOCUMENTOS Y CONSENTIMIENTO (LO MÁS DESTACADO) */}
+                <div style={{
+                  backgroundColor: '#F8FAFC',
+                  borderRadius: '14px',
+                  border: '1.5px solid #CBD5E1',
+                  padding: '1.25rem',
+                  boxShadow: '0 2px 6px rgba(0,0,0,0.03)'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.85rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <Paperclip size={20} color="#2563EB" />
+                      <h4 style={{ fontSize: '1rem', fontWeight: 800, color: '#1E293B', margin: 0 }}>
+                        Documentos Adjuntos y Consentimiento Informado
+                      </h4>
+                    </div>
+                    <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#2563EB', backgroundColor: '#EFF6FF', padding: '0.2rem 0.6rem', borderRadius: '20px', border: '1px solid #BFDBFE' }}>
+                      {docs.filter(d => d.url).length} de {docs.length} cargados
+                    </span>
+                  </div>
+
+                  {docs.length === 0 ? (
+                    <div style={{ textAlign: 'center', padding: '1rem', color: '#64748B', fontSize: '0.85rem' }}>
+                      No se han configurado preguntas con documentos adjuntos para este evento.
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                      {docs.map(doc => {
+                        const isPdf = doc.url?.toLowerCase().endsWith('.pdf')
+                        const isImg = doc.url?.toLowerCase().match(/\.(jpg|jpeg|png|webp)$/)
+
+                        return (
+                          <div 
+                            key={doc.id}
+                            style={{
+                              backgroundColor: doc.url ? '#FFFFFF' : '#FFFBEB',
+                              borderRadius: '10px',
+                              border: `1px solid ${doc.url ? (doc.isConsent ? '#93C5FD' : '#E2E8F0') : '#FDE68A'}`,
+                              padding: '1rem',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              gap: '1rem',
+                              flexWrap: 'wrap'
+                            }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flex: 1, minWidth: '220px' }}>
+                              <div style={{
+                                width: '42px',
+                                height: '42px',
+                                borderRadius: '8px',
+                                backgroundColor: doc.url ? (doc.isConsent ? '#EFF6FF' : '#F0FDF4') : '#FEF3C7',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                color: doc.url ? (doc.isConsent ? '#2563EB' : '#16A34A') : '#D97706',
+                                flexShrink: 0
+                              }}>
+                                <FileText size={22} />
+                              </div>
+                              <div>
+                                <div style={{ fontSize: '0.9rem', fontWeight: 800, color: '#0F172A', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                  {doc.label}
+                                  {doc.isConsent && (
+                                    <span style={{ fontSize: '0.65rem', backgroundColor: '#DBEAFE', color: '#1E40AF', padding: '0.1rem 0.4rem', borderRadius: '4px', fontWeight: 700 }}>
+                                      Consentimiento
+                                    </span>
+                                  )}
+                                </div>
+                                <div style={{ fontSize: '0.75rem', color: doc.url ? '#16A34A' : '#D97706', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.25rem', marginTop: '0.15rem' }}>
+                                  {doc.url ? (
+                                    <>
+                                      <CheckCircle2 size={13} />
+                                      <span>Documento adjunto correctamente {isPdf ? '(PDF)' : isImg ? '(Imagen)' : ''}</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <AlertTriangle size={13} />
+                                      <span>Pendiente / No adjuntado por el participante</span>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Actions for Document */}
+                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                              {doc.url ? (
+                                <>
+                                  <a
+                                    href={doc.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="btn btn-primary"
+                                    style={{
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '0.35rem',
+                                      padding: '0.45rem 0.9rem',
+                                      fontSize: '0.8rem',
+                                      fontWeight: 700,
+                                      backgroundColor: '#2563EB',
+                                      color: '#FFFFFF',
+                                      borderRadius: '8px',
+                                      textDecoration: 'none'
+                                    }}
+                                  >
+                                    <Eye size={15} />
+                                    <span>Ver Documento</span>
+                                    <ExternalLink size={12} />
+                                  </a>
+
+                                  <a
+                                    href={doc.url}
+                                    download
+                                    className="btn btn-outline"
+                                    style={{
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '0.35rem',
+                                      padding: '0.45rem 0.75rem',
+                                      fontSize: '0.8rem',
+                                      fontWeight: 600,
+                                      color: '#334155',
+                                      borderRadius: '8px',
+                                      textDecoration: 'none'
+                                    }}
+                                  >
+                                    <Download size={14} />
+                                    <span>Descargar</span>
+                                  </a>
+                                </>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const regToEdit = viewingReg
+                                    setViewingReg(null)
+                                    handleOpenEdit(regToEdit)
+                                  }}
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '0.35rem',
+                                    padding: '0.45rem 0.85rem',
+                                    fontSize: '0.8rem',
+                                    fontWeight: 700,
+                                    backgroundColor: '#F59E0B',
+                                    color: '#FFFFFF',
+                                    border: 'none',
+                                    borderRadius: '8px',
+                                    cursor: 'pointer'
+                                  }}
+                                >
+                                  <UploadCloud size={14} />
+                                  <span>Subir ahora</span>
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* DEMOGRÁFICA Y CONTACTO */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.75rem' }}>
+                  <div style={{ backgroundColor: '#F8FAFC', padding: '0.75rem 1rem', borderRadius: '10px', border: '1px solid #E2E8F0' }}>
+                    <span style={{ fontSize: '0.7rem', fontWeight: 800, color: '#64748B', textTransform: 'uppercase' }}>Municipio</span>
+                    <p style={{ margin: '0.15rem 0 0', fontWeight: 700, color: '#0F172A', fontSize: '0.95rem' }}>
+                      {viewingReg.person.municipality || 'No registrado'}
+                    </p>
+                  </div>
+                  <div style={{ backgroundColor: '#F8FAFC', padding: '0.75rem 1rem', borderRadius: '10px', border: '1px solid #E2E8F0' }}>
+                    <span style={{ fontSize: '0.7rem', fontWeight: 800, color: '#64748B', textTransform: 'uppercase' }}>Fecha de Nacimiento</span>
+                    <p style={{ margin: '0.15rem 0 0', fontWeight: 700, color: '#0F172A', fontSize: '0.95rem' }}>
+                      {viewingReg.person.birthDate ? new Date(viewingReg.person.birthDate).toLocaleDateString('es-CO') : 'No registrada'}
+                    </p>
+                  </div>
+                  <div style={{ backgroundColor: '#F8FAFC', padding: '0.75rem 1rem', borderRadius: '10px', border: '1px solid #E2E8F0' }}>
+                    <span style={{ fontSize: '0.7rem', fontWeight: 800, color: '#64748B', textTransform: 'uppercase' }}>Sexo / Género</span>
+                    <p style={{ margin: '0.15rem 0 0', fontWeight: 700, color: '#0F172A', fontSize: '0.95rem' }}>
+                      {viewingReg.person.sex || 'No registrado'} {viewingReg.person.gender ? `(${viewingReg.person.gender})` : ''}
+                    </p>
+                  </div>
+                  <div style={{ backgroundColor: '#F8FAFC', padding: '0.75rem 1rem', borderRadius: '10px', border: '1px solid #E2E8F0' }}>
+                    <span style={{ fontSize: '0.7rem', fontWeight: 800, color: '#64748B', textTransform: 'uppercase' }}>EPS</span>
+                    <p style={{ margin: '0.15rem 0 0', fontWeight: 700, color: '#0F172A', fontSize: '0.95rem' }}>
+                      {addData.eps || 'No registrada'}
+                    </p>
+                  </div>
+                  <div style={{ backgroundColor: '#F8FAFC', padding: '0.75rem 1rem', borderRadius: '10px', border: '1px solid #E2E8F0' }}>
+                    <span style={{ fontSize: '0.7rem', fontWeight: 800, color: '#64748B', textTransform: 'uppercase' }}>Contacto de Emergencia</span>
+                    <p style={{ margin: '0.15rem 0 0', fontWeight: 700, color: '#0F172A', fontSize: '0.95rem' }}>
+                      {addData.contactoEmergencia || 'No registrado'}
+                    </p>
+                  </div>
+                  <div style={{ backgroundColor: '#F8FAFC', padding: '0.75rem 1rem', borderRadius: '10px', border: '1px solid #E2E8F0' }}>
+                    <span style={{ fontSize: '0.7rem', fontWeight: 800, color: '#64748B', textTransform: 'uppercase' }}>Grupo Juvenil</span>
+                    <p style={{ margin: '0.15rem 0 0', fontWeight: 700, color: '#0F172A', fontSize: '0.95rem' }}>
+                      {addData.grupoJuvenil || 'Ninguno'}
+                    </p>
+                  </div>
+                </div>
+
+                {/* ESTADO KIT DE BIENVENIDA */}
+                <div style={{
+                  backgroundColor: hasKit(viewingReg) ? '#F0FDF4' : '#FFFBEB',
+                  borderRadius: '12px',
+                  padding: '1rem',
+                  border: `1.5px solid ${hasKit(viewingReg) ? '#BBF7D0' : '#FDE68A'}`,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  flexWrap: 'wrap',
+                  gap: '0.75rem'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                    <div style={{ fontSize: '1.5rem' }}>🎒</div>
+                    <div>
+                      <h4 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 800, color: hasKit(viewingReg) ? '#166534' : '#92400E' }}>
+                        Kit de Bienvenida: {hasKit(viewingReg) ? 'ENTREGADO' : 'PENDIENTE POR ENTREGAR'}
+                      </h4>
+                      {(() => {
+                        const kit = getKitScan(viewingReg)
+                        if (kit) {
+                          const dateStr = new Date(kit.timestamp).toLocaleDateString('es-CO', {
+                            timeZone: 'America/Bogota',
+                            weekday: 'long',
+                            day: 'numeric',
+                            month: 'short'
+                          })
+                          const hourStr = new Date(kit.timestamp).toLocaleTimeString('es-CO', {
+                            timeZone: 'America/Bogota',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            hour12: true
+                          })
+                          return (
+                            <p style={{ margin: '0.15rem 0 0', fontSize: '0.8rem', color: '#15803D' }}>
+                              Entregado el {dateStr} a las {hourStr} {kit.attendedBy ? `(Atendido por: ${kit.attendedBy})` : ''}
+                            </p>
+                          )
+                        }
+                        return (
+                          <p style={{ margin: '0.15rem 0 0', fontSize: '0.8rem', color: '#B45309' }}>
+                            Este participante no tiene registrada la entrega del kit en ninguno de los días.
+                          </p>
+                        )
+                      })()}
+                    </div>
+                  </div>
+
+                  <div>
+                    {hasKit(viewingReg) ? (
+                      <button
+                        type="button"
+                        onClick={() => handleToggleKit(viewingReg, false)}
+                        style={{
+                          padding: '0.4rem 0.8rem',
+                          backgroundColor: '#FEF2F2',
+                          color: '#DC2626',
+                          border: '1px solid #FECACA',
+                          borderRadius: '8px',
+                          fontSize: '0.78rem',
+                          fontWeight: 700,
+                          cursor: 'pointer'
+                        }}
+                      >
+                        Desmarcar / Remover Kit
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleToggleKit(viewingReg, true)}
+                        style={{
+                          padding: '0.4rem 0.8rem',
+                          backgroundColor: '#16A34A',
+                          color: '#FFFFFF',
+                          border: 'none',
+                          borderRadius: '8px',
+                          fontSize: '0.78rem',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          boxShadow: '0 2px 5px rgba(22, 163, 74, 0.3)'
+                        }}
+                      >
+                        + Marcar Kit como Entregado
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* CHECKPOINTS REGISTRADOS */}
+                <div style={{ backgroundColor: '#F8FAFC', borderRadius: '12px', padding: '1rem', border: '1px solid #E2E8F0' }}>
+                  <span style={{ fontSize: '0.75rem', fontWeight: 800, color: '#475569', textTransform: 'uppercase', display: 'block', marginBottom: '0.5rem' }}>
+                    Historial de Puntos y Refrigerios:
+                  </span>
+                  {cps.length === 0 ? (
+                    <p style={{ margin: 0, fontSize: '0.85rem', color: '#94A3B8' }}>Aún no se han registrado puntos o refrigerios para este participante.</p>
+                  ) : (
+                    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                      {cps.map((cp: any, idx: number) => (
+                        <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', backgroundColor: '#FFFFFF', padding: '0.35rem 0.65rem', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '0.8rem', fontWeight: 700 }}>
+                          <CheckCircle2 size={14} color="#16A34A" />
+                          <span>{cp.name}</span>
+                          <span style={{ fontSize: '0.7rem', color: '#64748B', fontWeight: 500 }}>
+                            ({new Date(cp.timestamp).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'America/Bogota' })})
+                          </span>
+                          {cp.attendedBy && (
+                            <span style={{ fontSize: '0.68rem', color: '#1E40AF', backgroundColor: '#EFF6FF', padding: '0.1rem 0.4rem', borderRadius: '4px', fontWeight: 600 }}>
+                              {cp.attendedBy}
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveCheckpoint(viewingReg.id, idx)}
+                            style={{
+                              background: 'none',
+                              border: 'none',
+                              color: '#EF4444',
+                              cursor: 'pointer',
+                              padding: '0.1rem 0.2rem',
+                              display: 'flex',
+                              alignItems: 'center',
+                              marginLeft: '0.2rem'
+                            }}
+                            title="Eliminar esta entrega puntual"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+              </div>
+
+              {/* Modal Footer */}
+              <div style={{
+                padding: '1rem 1.5rem',
+                borderTop: '1px solid #E2E8F0',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                backgroundColor: '#F8FAFC'
+              }}>
+                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <Link
+                    href={`/event/${eventId}/sticker/${viewingReg.id}`}
+                    target="_blank"
+                    className="btn btn-outline"
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.85rem', fontWeight: 600 }}
+                  >
+                    <Printer size={15} color="#2563EB" />
+                    <span>Imprimir Carnet / Sticker</span>
+                  </Link>
+
+                  <Link
+                    href={`/admin/events/${eventId}/report?search=${encodeURIComponent(viewingReg.person?.documentNumber || viewingReg.id)}`}
+                    target="_blank"
+                    className="btn btn-outline"
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.85rem', fontWeight: 600, backgroundColor: '#F0FDF4', borderColor: '#BBF7D0', color: '#15803D' }}
+                  >
+                    <FileText size={15} color="#16A34A" />
+                    <span>Ver / Imprimir Ficha (PDF)</span>
+                  </Link>
+                </div>
+
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const regToEdit = viewingReg
+                      setViewingReg(null)
+                      handleOpenEdit(regToEdit)
+                    }}
+                    className="btn btn-primary"
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '0.5rem 1rem', fontSize: '0.85rem', fontWeight: 700, backgroundColor: '#2563EB' }}
+                  >
+                    <Edit3 size={15} />
+                    <span>Editar Participante</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setViewingReg(null)}
+                    className="btn btn-outline"
+                    style={{ padding: '0.5rem 1rem', fontSize: '0.85rem', fontWeight: 600 }}
+                  >
+                    Cerrar
+                  </button>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        )
+      })()}
 
       {/* ================= DELETE CONFIRM MODAL ================= */}
       {deletingReg && (

@@ -57,6 +57,16 @@ export async function PATCH(
         : []
     }
 
+    if (body.checkpoints !== undefined) {
+      requiredFieldsObj.checkpoints = Array.isArray(body.checkpoints)
+        ? body.checkpoints.map((c: string) => c.toString().trim()).filter(Boolean)
+        : []
+    }
+
+    if (body.dailySchedule !== undefined) {
+      requiredFieldsObj.dailySchedule = body.dailySchedule
+    }
+
     if (body.requiredFields !== undefined) {
       const incoming = typeof body.requiredFields === 'string' 
         ? JSON.parse(body.requiredFields) 
@@ -75,6 +85,7 @@ export async function PATCH(
     })
 
     revalidatePath(`/admin/events/${id}`)
+    revalidatePath(`/admin/events/${id}/scanner`)
     revalidatePath(`/event/${id}/register`)
     return NextResponse.json({ success: true, event: updated })
   } catch (err: any) {

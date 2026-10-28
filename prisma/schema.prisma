@@ -8,13 +8,14 @@ datasource db {
 }
 
 model User {
-  id           String   @id @default(cuid())
-  email        String   @unique
-  passwordHash String
-  name         String
-  role         String   @default("AUXILIAR") // ADMIN, GESTOR, AUXILIAR, VALIDADOR, CONSULTA
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id              String   @id @default(cuid())
+  email           String   @unique
+  passwordHash    String
+  name            String
+  role            String   @default("AUXILIAR") // ADMIN, GESTOR, AUXILIAR, VALIDADOR, CONSULTA
+  assignedEventId String?  // ID del evento asignado para operadores de refrigerios/asistencia
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 }
 
 model Event {

@@ -68,7 +68,7 @@ export default function EventMetricsCards({
         </div>
         
         {Object.keys(checkpoints).length > 0 && (
-          <div style={{ marginTop: '0.5rem', borderTop: '1px solid #E2E8F0', paddingTop: '0.5rem' }}>
+          <div style={{ marginTop: '0.5rem', borderTop: '1px solid #E2E8F0', paddingTop: '0.5rem', maxHeight: '130px', overflowY: 'auto' }}>
             <h4 style={{ fontSize: '0.7rem', fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase', marginBottom: '0.35rem' }}>Entregas Realizadas:</h4>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
               {Object.entries(checkpoints).map(([name, count]) => (

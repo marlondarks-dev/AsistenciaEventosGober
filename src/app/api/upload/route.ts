@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { writeFile, mkdir } from 'fs/promises'
+import fs from 'fs'
 import path from 'path'
 import { randomUUID } from 'crypto'
 
@@ -15,24 +16,29 @@ export async function POST(req: Request) {
     const bytes = await file.arrayBuffer()
     const buffer = Buffer.from(bytes)
 
-    const ext = file.name.split('.').pop() || 'jpg'
+    const rawExt = file.name ? file.name.split('.').pop() || 'jpg' : 'jpg'
+    const ext = rawExt.toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg'
     const filename = `${randomUUID()}.${ext}`
-    
-    // Save to public/uploads
-    const uploadDir = path.join(process.cwd(), 'public', 'uploads')
-    
-    try {
-      await mkdir(uploadDir, { recursive: true })
-    } catch (err) {
-      // Ignore if dir exists
+
+    // 1. Primary public/uploads directory
+    const publicUploadDir = path.join(process.cwd(), 'public', 'uploads')
+    await mkdir(publicUploadDir, { recursive: true })
+    await writeFile(path.join(publicUploadDir, filename), buffer)
+
+    // 2. Persistent storage in /var/data/asistencia/uploads (if on production server)
+    if (fs.existsSync('/var/data/asistencia')) {
+      try {
+        const prodUploadDir = '/var/data/asistencia/uploads'
+        await mkdir(prodUploadDir, { recursive: true })
+        await writeFile(path.join(prodUploadDir, filename), buffer)
+      } catch (e) {
+        console.error('Could not duplicate to /var/data/asistencia/uploads:', e)
+      }
     }
-    
-    const filePath = path.join(uploadDir, filename)
-    await writeFile(filePath, buffer)
 
     return NextResponse.json({ url: `/uploads/${filename}` })
   } catch (e: any) {
     console.error('Upload Error:', e)
-    return NextResponse.json({ error: e.message }, { status: 500 })
+    return NextResponse.json({ error: e.message || 'Error al procesar el archivo' }, { status: 500 })
   }
 }

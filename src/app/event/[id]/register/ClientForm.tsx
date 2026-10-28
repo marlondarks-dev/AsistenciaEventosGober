@@ -184,6 +184,10 @@ export default function ClientForm({
     if (!ctx) return
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
 
+    // Immediate instant preview from canvas data URL!
+    const localDataUrl = canvas.toDataURL('image/jpeg', 0.88)
+    setFotoIngreso(localDataUrl)
+
     stopCamera()
     setUploadingFoto(true)
 
@@ -1097,7 +1101,12 @@ export default function ClientForm({
                         onChange={async (e) => {
                           const file = e.target.files?.[0]
                           if (!file) return
+                          
+                          // Instant local preview
+                          const localUrl = URL.createObjectURL(file)
+                          setFotoIngreso(localUrl)
                           setUploadingFoto(true)
+
                           try {
                             const fd = new FormData()
                             fd.append('file', file)

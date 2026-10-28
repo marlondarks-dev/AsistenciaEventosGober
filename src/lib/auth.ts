@@ -9,6 +9,7 @@ export interface SessionUser {
   email: string
   name: string
   role: string
+  assignedEventId?: string | null
 }
 
 function sign(payload: string): string {
@@ -75,7 +76,8 @@ export async function getSession(): Promise<SessionUser | null> {
       id: payload.id,
       email: payload.email,
       name: payload.name,
-      role: payload.role
+      role: payload.role,
+      assignedEventId: payload.assignedEventId || null
     }
   } catch {
     return null
