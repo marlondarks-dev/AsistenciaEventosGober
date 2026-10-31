@@ -26,7 +26,10 @@ import {
   ExternalLink,
   Paperclip,
   CheckCircle2,
-  AlertTriangle
+  AlertTriangle,
+  Utensils,
+  Calendar,
+  Plus
 } from 'lucide-react'
 
 const MUNICIPIOS_NDS = [
@@ -67,6 +70,71 @@ export default function RegistrationsTable({
   const [deleting, setDeleting] = useState(false)
   const [exportingExcel, setExportingExcel] = useState(false)
   const [toast, setToast] = useState<{ type: 'success' | 'error', text: string } | null>(null)
+  
+  // Modals for Checkpoints / Refrigerios
+  const [managingCheckpointsReg, setManagingCheckpointsReg] = useState<any | null>(null)
+  const [markingModal, setMarkingModal] = useState<{
+    reg: any
+    checkpointName: string
+    dateTimeValue: string
+    attendedBy: string
+    isEdit: boolean
+    checkpointIndex?: number
+  } | null>(null)
+  const [customCheckpointInput, setCustomCheckpointInput] = useState('')
+
+  // Parse checkpoints & daily schedule from event
+  const { eventCheckpoints, eventDailySchedule, eventDaysList } = useMemo(() => {
+    try {
+      const parsed = eventRequiredFields ? JSON.parse(eventRequiredFields) : {}
+      const cps: string[] = Array.isArray(parsed.checkpoints) && parsed.checkpoints.length > 0 
+        ? parsed.checkpoints 
+        : ['Ingreso', 'Kit de Bienvenida']
+      
+      const dailySched = parsed.dailySchedule || null
+      
+      // If dailySchedule exists with days
+      if (dailySched?.days && Array.isArray(dailySched.days) && dailySched.days.length > 0) {
+        return {
+          eventCheckpoints: cps,
+          eventDailySchedule: dailySched,
+          eventDaysList: dailySched.days.map((d: any) => ({
+            day: d.day,
+            meals: Array.isArray(d.meals) ? d.meals : []
+          }))
+        }
+      }
+
+      // Fallback: parse days and meals from flat checkpoint names with " - "
+      const dayMap: Record<string, string[]> = {}
+      const general: string[] = []
+
+      cps.forEach((cp: string) => {
+        if (cp.includes(' - ')) {
+          const [dPart, ...mPart] = cp.split(' - ')
+          const dayName = dPart.trim()
+          const mealName = mPart.join(' - ').trim()
+          if (!dayMap[dayName]) dayMap[dayName] = []
+          if (!dayMap[dayName].includes(mealName)) dayMap[dayName].push(mealName)
+        } else {
+          if (!general.includes(cp)) general.push(cp)
+        }
+      })
+
+      const daysList = Object.entries(dayMap).map(([day, meals]) => ({ day, meals }))
+      return {
+        eventCheckpoints: cps,
+        eventDailySchedule: { generalPoints: general, days: daysList },
+        eventDaysList: daysList
+      }
+    } catch {
+      return {
+        eventCheckpoints: ['Ingreso', 'Kit de Bienvenida'],
+        eventDailySchedule: null,
+        eventDaysList: []
+      }
+    }
+  }, [eventRequiredFields])
   
   // Upload states inside modal
   const [uploadingModalPhoto, setUploadingModalPhoto] = useState(false)
@@ -261,8 +329,64 @@ export default function RegistrationsTable({
   const kitDeliveredCount = registrations.filter(r => hasKit(r)).length
   const kitPendingCount = registrations.filter(r => !hasKit(r) && r.status !== 'CANCELADO').length
 
-  // Toggle kit delivery or remove kit checkpoint
-  const handleToggleKit = async (reg: any, deliver: boolean) => {
+  // Helper to format ISO or Date to datetime-local value (YYYY-MM-DDTHH:mm) in Colombia timezone
+  const toDatetimeLocalValue = (dateInput?: Date | string | null): string => {
+    const d = dateInput ? new Date(dateInput) : new Date()
+    if (isNaN(d.getTime())) return ''
+    
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Bogota',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+    }).formatToParts(d)
+
+    const getPart = (type: string) => parts.find(p => p.type === type)?.value || '00'
+    const year = getPart('year')
+    const month = getPart('month')
+    const day = getPart('day')
+    let hour = getPart('hour')
+    if (hour === '24') hour = '00'
+    const minute = getPart('minute')
+
+    return `${year}-${month}-${day}T${hour}:${minute}`
+  }
+
+  // Suggest intelligent default datetime based on checkpoint name
+  const getDefaultDateTimeForCheckpoint = (cpName: string): string => {
+    const lower = cpName.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    
+    // Default time based on meal type
+    let defaultHour = "10:30"
+    if (lower.includes('desayuno')) defaultHour = "08:00"
+    else if (lower.includes('almuerzo')) defaultHour = "12:45"
+    else if (lower.includes('tarde')) defaultHour = "16:00"
+    else if (lower.includes('cena')) defaultHour = "19:30"
+    else if (lower.includes('ingreso')) defaultHour = "07:30"
+    else if (lower.includes('kit') || lower.includes('bienvenida')) defaultHour = "08:30"
+
+    // Default year and month (2026-10 for Juventudes Festival or current year-month)
+    let year = "2026"
+    let month = "10"
+    
+    // Check if cpName contains a day number e.g. "22", "23", "24", "25"
+    const matchDay = cpName.match(/\b(2[0-9]|1[0-9]|[1-9])\b/)
+    if (matchDay) {
+      const dayNum = matchDay[1].padStart(2, '0')
+      return `${year}-${month}-${dayNum}T${defaultHour}`
+    }
+
+    // Fallback: today's date in Colombia
+    const nowLocal = toDatetimeLocalValue(new Date())
+    const todayDate = nowLocal.split('T')[0]
+    return `${todayDate}T${defaultHour}`
+  }
+
+  // Helper to extract checkpoint counts for a participant
+  const getParticipantCheckpointStats = (reg: any) => {
     let cps: any[] = []
     try {
       cps = typeof reg.checkpoints === 'string' ? JSON.parse(reg.checkpoints || '[]') : (reg.checkpoints || [])
@@ -271,38 +395,188 @@ export default function RegistrationsTable({
       cps = []
     }
 
+    const totalConfigured = eventCheckpoints.length
+    const deliveredCount = cps.length
+    return {
+      deliveredCount,
+      totalConfigured,
+      cps
+    }
+  }
+
+  // Open modal to mark a new checkpoint with date/time picker
+  const handleOpenMarkCheckpoint = (reg: any, checkpointName: string) => {
+    const defaultDateTime = getDefaultDateTimeForCheckpoint(checkpointName)
+    setMarkingModal({
+      reg,
+      checkpointName,
+      dateTimeValue: defaultDateTime,
+      attendedBy: 'Administrador (Panel)',
+      isEdit: false
+    })
+  }
+
+  // Open modal to edit existing checkpoint date/time
+  const handleOpenEditCheckpointDateTime = (reg: any, checkpointIndex: number) => {
+    let cps: any[] = []
+    try {
+      cps = typeof reg.checkpoints === 'string' ? JSON.parse(reg.checkpoints || '[]') : (reg.checkpoints || [])
+    } catch {
+      cps = []
+    }
+    const cp = cps[checkpointIndex]
+    if (!cp) return
+
+    setMarkingModal({
+      reg,
+      checkpointName: cp.name,
+      dateTimeValue: toDatetimeLocalValue(cp.timestamp),
+      attendedBy: cp.attendedBy || 'Administrador (Panel)',
+      isEdit: true,
+      checkpointIndex
+    })
+  }
+
+  // Save or update checkpoint with chosen date and time
+  const handleSaveCheckpointDateTime = async () => {
+    if (!markingModal) return
+    const { reg, checkpointName, dateTimeValue, attendedBy, isEdit, checkpointIndex } = markingModal
+
+    if (!dateTimeValue) {
+      showToast('error', 'Por favor selecciona la fecha y hora de la entrega.')
+      return
+    }
+
+    const chosenDate = new Date(dateTimeValue)
+    if (isNaN(chosenDate.getTime())) {
+      showToast('error', 'Fecha u hora no válida.')
+      return
+    }
+
+    const timestampISO = chosenDate.toISOString()
+    const horaColombia = chosenDate.toLocaleString('es-CO', {
+      timeZone: 'America/Bogota',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true
+    })
+
+    let cps: any[] = []
+    try {
+      cps = typeof reg.checkpoints === 'string' ? JSON.parse(reg.checkpoints || '[]') : (reg.checkpoints || [])
+      if (!Array.isArray(cps)) cps = []
+    } catch {
+      cps = []
+    }
+
+    if (isEdit && checkpointIndex !== undefined && checkpointIndex >= 0 && checkpointIndex < cps.length) {
+      // Editing existing checkpoint timestamp
+      cps[checkpointIndex] = {
+        ...cps[checkpointIndex],
+        timestamp: timestampISO,
+        horaColombia,
+        attendedBy: attendedBy.trim() || 'Administrador (Panel)'
+      }
+    } else {
+      // Adding new checkpoint - check duplicates
+      if (isKitName(checkpointName) && cps.some((c: any) => isKitName(c.name))) {
+        showToast('error', 'Este participante ya tiene el kit registrado.')
+        return
+      }
+
+      if (cps.some((c: any) => c.name === checkpointName)) {
+        showToast('error', `Este participante ya tiene registrado "${checkpointName}".`)
+        return
+      }
+
+      cps.push({
+        name: checkpointName,
+        timestamp: timestampISO,
+        horaColombia,
+        attendedBy: attendedBy.trim() || 'Administrador (Panel)',
+        evidenceUrl: null
+      })
+    }
+
+    const newStatus = reg.status === 'REGISTRADO' ? 'ASISTIO' : reg.status
+    const payload: any = {
+      checkpoints: JSON.stringify(cps),
+      status: newStatus
+    }
+
+    try {
+      const res = await fetch(`/api/registrations/${reg.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+
+      if (!res.ok) throw new Error('Error al guardar la entrega del refrigerio/punto')
+
+      const updatedReg = {
+        ...reg,
+        checkpoints: JSON.stringify(cps),
+        status: newStatus,
+        attendedAt: reg.attendedAt || timestampISO
+      }
+
+      setRegistrations(prev => prev.map(r => r.id === reg.id ? updatedReg : r))
+      
+      if (viewingReg && viewingReg.id === reg.id) {
+        setViewingReg(updatedReg)
+      }
+      if (managingCheckpointsReg && managingCheckpointsReg.id === reg.id) {
+        setManagingCheckpointsReg(updatedReg)
+      }
+
+      setMarkingModal(null)
+      showToast('success', isEdit ? 'Fecha y hora de entrega actualizada correctamente.' : `¡"${checkpointName}" marcado como entregado!`)
+      fetchLiveRegistrations(false)
+    } catch (err: any) {
+      showToast('error', err.message || 'Error al actualizar el registro')
+    }
+  }
+
+  // Toggle kit delivery or remove kit checkpoint
+  const handleToggleKit = async (reg: any, deliver: boolean) => {
     if (deliver) {
+      let cps: any[] = []
+      try {
+        cps = typeof reg.checkpoints === 'string' ? JSON.parse(reg.checkpoints || '[]') : (reg.checkpoints || [])
+        if (!Array.isArray(cps)) cps = []
+      } catch {
+        cps = []
+      }
+
       if (cps.some((c: any) => isKitName(c.name))) {
         showToast('error', 'Este participante ya tiene el kit registrado.')
         return
       }
 
-      const now = new Date()
-      const nowColombia = now.toLocaleString('es-CO', { 
-        timeZone: 'America/Bogota',
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hour12: true
-      })
-
-      cps.push({
-        name: 'Kit de Bienvenida',
-        timestamp: now.toISOString(),
-        horaColombia: nowColombia,
-        attendedBy: 'Administrador (Panel)',
-        evidenceUrl: null
-      })
-    } else {
-      const pName = `${reg.person?.firstName || ''} ${reg.person?.lastName || ''}`.trim()
-      if (!confirm(`¿Desea desmarcar o retirar el Kit de Bienvenida para "${pName}"?`)) {
-        return
-      }
-      cps = cps.filter((c: any) => !isKitName(c.name))
+      // Open date/time modal so user can adjust or confirm date
+      handleOpenMarkCheckpoint(reg, 'Kit de Bienvenida')
+      return
     }
+
+    // Desmarcar / Remover Kit
+    const pName = `${reg.person?.firstName || ''} ${reg.person?.lastName || ''}`.trim()
+    if (!confirm(`¿Desea desmarcar o retirar el Kit de Bienvenida para "${pName}"?`)) {
+      return
+    }
+
+    let cps: any[] = []
+    try {
+      cps = typeof reg.checkpoints === 'string' ? JSON.parse(reg.checkpoints || '[]') : (reg.checkpoints || [])
+      if (!Array.isArray(cps)) cps = []
+    } catch {
+      cps = []
+    }
+
+    cps = cps.filter((c: any) => !isKitName(c.name))
 
     try {
       const res = await fetch(`/api/registrations/${reg.id}`, {
@@ -311,13 +585,17 @@ export default function RegistrationsTable({
         body: JSON.stringify({ checkpoints: JSON.stringify(cps) })
       })
 
-      if (!res.ok) throw new Error('Error al actualizar el estado del kit')
+      if (!res.ok) throw new Error('Error al desmarcar el kit')
 
-      setRegistrations(prev => prev.map(r => r.id === reg.id ? { ...r, checkpoints: JSON.stringify(cps) } : r))
+      const updatedReg = { ...reg, checkpoints: JSON.stringify(cps) }
+      setRegistrations(prev => prev.map(r => r.id === reg.id ? updatedReg : r))
       if (viewingReg && viewingReg.id === reg.id) {
-        setViewingReg({ ...viewingReg, checkpoints: JSON.stringify(cps) })
+        setViewingReg(updatedReg)
       }
-      showToast('success', deliver ? '¡Kit de Bienvenida marcado como entregado!' : 'Kit de Bienvenida desmarcado exitosamente.')
+      if (managingCheckpointsReg && managingCheckpointsReg.id === reg.id) {
+        setManagingCheckpointsReg(updatedReg)
+      }
+      showToast('success', 'Kit de Bienvenida desmarcado exitosamente.')
       fetchLiveRegistrations(false)
     } catch (err: any) {
       showToast('error', err.message || 'Error al actualizar el kit')
@@ -332,12 +610,13 @@ export default function RegistrationsTable({
     let cps: any[] = []
     try {
       cps = typeof reg.checkpoints === 'string' ? JSON.parse(reg.checkpoints || '[]') : (reg.checkpoints || [])
+      if (!Array.isArray(cps)) cps = []
     } catch {
       cps = []
     }
 
     const target = cps[indexToRemove]
-    if (!confirm(`¿Eliminar la entrega de "${target?.name || 'este punto'}"? Esta acción no se puede deshacer.`)) {
+    if (!confirm(`¿Eliminar o desmarcar la entrega de "${target?.name || 'este punto'}"? Esta acción no se puede deshacer.`)) {
       return
     }
 
@@ -352,11 +631,15 @@ export default function RegistrationsTable({
 
       if (!res.ok) throw new Error('Error al eliminar entrega')
 
-      setRegistrations(prev => prev.map(r => r.id === regId ? { ...r, checkpoints: JSON.stringify(updatedCps) } : r))
+      const updatedReg = { ...reg, checkpoints: JSON.stringify(updatedCps) }
+      setRegistrations(prev => prev.map(r => r.id === regId ? updatedReg : r))
       if (viewingReg && viewingReg.id === regId) {
-        setViewingReg({ ...viewingReg, checkpoints: JSON.stringify(updatedCps) })
+        setViewingReg(updatedReg)
       }
-      showToast('success', 'Entrega eliminada correctamente.')
+      if (managingCheckpointsReg && managingCheckpointsReg.id === regId) {
+        setManagingCheckpointsReg(updatedReg)
+      }
+      showToast('success', 'Entrega desmarcada correctamente.')
       fetchLiveRegistrations(false)
     } catch (err: any) {
       showToast('error', err.message || 'Error al eliminar entrega')
@@ -1129,25 +1412,50 @@ export default function RegistrationsTable({
                                   Por: {kit.attendedBy}
                                 </span>
                               )}
-                              <button
-                                type="button"
-                                onClick={() => handleToggleKit(reg, false)}
-                                style={{
-                                  background: 'none',
-                                  border: 'none',
-                                  color: '#EF4444',
-                                  fontSize: '0.68rem',
-                                  textDecoration: 'underline',
-                                  cursor: 'pointer',
-                                  padding: 0,
-                                  textAlign: 'left',
-                                  marginTop: '0.1rem',
-                                  width: 'fit-content'
-                                }}
-                                title="Desmarcar entrega de kit (por error o duplicado)"
-                              >
-                                Desmarcar
-                              </button>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginTop: '0.15rem' }}>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    let cps: any[] = []
+                                    try {
+                                      cps = typeof reg.checkpoints === 'string' ? JSON.parse(reg.checkpoints) : reg.checkpoints
+                                    } catch(e) {}
+                                    const kitIdx = cps.findIndex((c: any) => isKitName(c?.name))
+                                    if (kitIdx >= 0) {
+                                      handleOpenEditCheckpointDateTime(reg, kitIdx)
+                                    }
+                                  }}
+                                  style={{
+                                    background: 'none',
+                                    border: 'none',
+                                    color: '#2563EB',
+                                    fontSize: '0.68rem',
+                                    textDecoration: 'underline',
+                                    cursor: 'pointer',
+                                    padding: 0
+                                  }}
+                                  title="Ajustar fecha y hora de entrega del kit"
+                                >
+                                  Editar fecha
+                                </button>
+                                <span style={{ fontSize: '0.68rem', color: '#CBD5E1' }}>•</span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleKit(reg, false)}
+                                  style={{
+                                    background: 'none',
+                                    border: 'none',
+                                    color: '#EF4444',
+                                    fontSize: '0.68rem',
+                                    textDecoration: 'underline',
+                                    cursor: 'pointer',
+                                    padding: 0
+                                  }}
+                                  title="Desmarcar entrega de kit (por error o duplicado)"
+                                >
+                                  Desmarcar
+                                </button>
+                              </div>
                             </div>
                           )
                         } else {
@@ -1185,7 +1493,7 @@ export default function RegistrationsTable({
                                   cursor: 'pointer',
                                   width: 'fit-content'
                                 }}
-                                title="Marcar kit de bienvenida entregado"
+                                title="Marcar kit de bienvenida entregado (con selección de fecha y hora)"
                               >
                                 + Marcar Kit
                               </button>
@@ -1226,6 +1534,45 @@ export default function RegistrationsTable({
                           <Eye size={14} />
                           <span>Ver</span>
                         </button>
+
+                        {/* Gestionar Refrigerios y Entregas */}
+                        {(() => {
+                          const stats = getParticipantCheckpointStats(reg)
+                          return (
+                            <button
+                              type="button"
+                              onClick={() => setManagingCheckpointsReg(reg)}
+                              title="Gestionar y marcar refrigerios, comidas y puntos de control"
+                              style={{
+                                padding: '0.4rem 0.65rem',
+                                backgroundColor: '#FEF3C7',
+                                border: '1px solid #FCD34D',
+                                borderRadius: '6px',
+                                color: '#92400E',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.35rem',
+                                fontSize: '0.75rem',
+                                fontWeight: 700,
+                                cursor: 'pointer'
+                              }}
+                            >
+                              <Utensils size={14} color="#D97706" />
+                              <span>Refrigerios</span>
+                              <span style={{
+                                fontSize: '0.68rem',
+                                backgroundColor: '#FFFFFF',
+                                color: stats.deliveredCount > 0 ? '#15803D' : '#92400E',
+                                padding: '0.05rem 0.35rem',
+                                borderRadius: '10px',
+                                border: '1px solid #FDE68A',
+                                fontWeight: 800
+                              }}>
+                                {stats.deliveredCount}
+                              </span>
+                            </button>
+                          )
+                        })()}
 
                         {/* Sticker */}
                         <Link 
@@ -2245,22 +2592,50 @@ export default function RegistrationsTable({
 
                   <div>
                     {hasKit(viewingReg) ? (
-                      <button
-                        type="button"
-                        onClick={() => handleToggleKit(viewingReg, false)}
-                        style={{
-                          padding: '0.4rem 0.8rem',
-                          backgroundColor: '#FEF2F2',
-                          color: '#DC2626',
-                          border: '1px solid #FECACA',
-                          borderRadius: '8px',
-                          fontSize: '0.78rem',
-                          fontWeight: 700,
-                          cursor: 'pointer'
-                        }}
-                      >
-                        Desmarcar / Remover Kit
-                      </button>
+                      <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            let cpsList: any[] = []
+                            try {
+                              cpsList = typeof viewingReg.checkpoints === 'string' ? JSON.parse(viewingReg.checkpoints) : viewingReg.checkpoints
+                            } catch(e) {}
+                            const kitIdx = cpsList.findIndex((c: any) => isKitName(c?.name))
+                            if (kitIdx >= 0) {
+                              handleOpenEditCheckpointDateTime(viewingReg, kitIdx)
+                            }
+                          }}
+                          style={{
+                            padding: '0.4rem 0.8rem',
+                            backgroundColor: '#EFF6FF',
+                            color: '#1D4ED8',
+                            border: '1px solid #BFDBFE',
+                            borderRadius: '8px',
+                            fontSize: '0.78rem',
+                            fontWeight: 700,
+                            cursor: 'pointer'
+                          }}
+                          title="Ajustar fecha y hora de entrega del kit"
+                        >
+                          ✏️ Editar Fecha/Hora
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleKit(viewingReg, false)}
+                          style={{
+                            padding: '0.4rem 0.8rem',
+                            backgroundColor: '#FEF2F2',
+                            color: '#DC2626',
+                            border: '1px solid #FECACA',
+                            borderRadius: '8px',
+                            fontSize: '0.78rem',
+                            fontWeight: 700,
+                            cursor: 'pointer'
+                          }}
+                        >
+                          Desmarcar Kit
+                        </button>
+                      </div>
                     ) : (
                       <button
                         type="button"
@@ -2285,44 +2660,107 @@ export default function RegistrationsTable({
 
                 {/* CHECKPOINTS REGISTRADOS */}
                 <div style={{ backgroundColor: '#F8FAFC', borderRadius: '12px', padding: '1rem', border: '1px solid #E2E8F0' }}>
-                  <span style={{ fontSize: '0.75rem', fontWeight: 800, color: '#475569', textTransform: 'uppercase', display: 'block', marginBottom: '0.5rem' }}>
-                    Historial de Puntos y Refrigerios:
-                  </span>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                    <span style={{ fontSize: '0.8rem', fontWeight: 800, color: '#334155', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                      <Utensils size={15} color="#D97706" /> Historial de Refrigerios y Puntos ({cps.length}):
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setManagingCheckpointsReg(viewingReg)}
+                      style={{
+                        padding: '0.35rem 0.75rem',
+                        backgroundColor: '#FEF3C7',
+                        border: '1px solid #FCD34D',
+                        borderRadius: '6px',
+                        color: '#92400E',
+                        fontSize: '0.75rem',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.35rem'
+                      }}
+                    >
+                      <Utensils size={13} />
+                      <span>Abrir Panel de Refrigerios</span>
+                    </button>
+                  </div>
+
                   {cps.length === 0 ? (
-                    <p style={{ margin: 0, fontSize: '0.85rem', color: '#94A3B8' }}>Aún no se han registrado puntos o refrigerios para este participante.</p>
+                    <div style={{ textAlign: 'center', padding: '1rem 0' }}>
+                      <p style={{ margin: '0 0 0.5rem 0', fontSize: '0.85rem', color: '#94A3B8' }}>Aún no se han registrado refrigerios o puntos para este participante.</p>
+                      <button
+                        type="button"
+                        onClick={() => setManagingCheckpointsReg(viewingReg)}
+                        className="btn btn-primary"
+                        style={{ fontSize: '0.78rem', padding: '0.35rem 0.8rem', backgroundColor: '#D97706', borderColor: '#D97706' }}
+                      >
+                        + Marcar Refrigerios de este Asistente
+                      </button>
+                    </div>
                   ) : (
                     <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                      {cps.map((cp: any, idx: number) => (
-                        <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', backgroundColor: '#FFFFFF', padding: '0.35rem 0.65rem', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '0.8rem', fontWeight: 700 }}>
-                          <CheckCircle2 size={14} color="#16A34A" />
-                          <span>{cp.name}</span>
-                          <span style={{ fontSize: '0.7rem', color: '#64748B', fontWeight: 500 }}>
-                            ({new Date(cp.timestamp).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'America/Bogota' })})
-                          </span>
-                          {cp.attendedBy && (
-                            <span style={{ fontSize: '0.68rem', color: '#1E40AF', backgroundColor: '#EFF6FF', padding: '0.1rem 0.4rem', borderRadius: '4px', fontWeight: 600 }}>
-                              {cp.attendedBy}
+                      {cps.map((cp: any, idx: number) => {
+                        const dateFormatted = new Date(cp.timestamp).toLocaleDateString('es-CO', {
+                          timeZone: 'America/Bogota',
+                          weekday: 'short',
+                          day: 'numeric',
+                          month: 'short'
+                        })
+                        const timeFormatted = new Date(cp.timestamp).toLocaleTimeString('es-CO', {
+                          timeZone: 'America/Bogota',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                          hour12: true
+                        })
+                        return (
+                          <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', backgroundColor: '#FFFFFF', padding: '0.4rem 0.65rem', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '0.8rem', fontWeight: 700 }}>
+                            <CheckCircle2 size={14} color="#16A34A" />
+                            <span>{cp.name}</span>
+                            <span style={{ fontSize: '0.7rem', color: '#64748B', fontWeight: 500 }}>
+                              ({dateFormatted} • {timeFormatted})
                             </span>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveCheckpoint(viewingReg.id, idx)}
-                            style={{
-                              background: 'none',
-                              border: 'none',
-                              color: '#EF4444',
-                              cursor: 'pointer',
-                              padding: '0.1rem 0.2rem',
-                              display: 'flex',
-                              alignItems: 'center',
-                              marginLeft: '0.2rem'
-                            }}
-                            title="Eliminar esta entrega puntual"
-                          >
-                            <Trash2 size={13} />
-                          </button>
-                        </div>
-                      ))}
+                            {cp.attendedBy && (
+                              <span style={{ fontSize: '0.68rem', color: '#1E40AF', backgroundColor: '#EFF6FF', padding: '0.1rem 0.4rem', borderRadius: '4px', fontWeight: 600 }}>
+                                {cp.attendedBy}
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEditCheckpointDateTime(viewingReg, idx)}
+                              style={{
+                                background: 'none',
+                                border: 'none',
+                                color: '#2563EB',
+                                cursor: 'pointer',
+                                padding: '0.1rem 0.25rem',
+                                display: 'flex',
+                                alignItems: 'center',
+                                marginLeft: '0.2rem'
+                              }}
+                              title="Modificar fecha y hora de esta entrega"
+                            >
+                              <Edit3 size={12} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveCheckpoint(viewingReg.id, idx)}
+                              style={{
+                                background: 'none',
+                                border: 'none',
+                                color: '#EF4444',
+                                cursor: 'pointer',
+                                padding: '0.1rem 0.25rem',
+                                display: 'flex',
+                                alignItems: 'center'
+                              }}
+                              title="Eliminar esta entrega puntual"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
+                        )
+                      })}
                     </div>
                   )}
                 </div>
@@ -2470,6 +2908,846 @@ export default function RegistrationsTable({
           </div>
         </div>
       )}
+
+      {/* ================= MODAL: GESTIÓN DE REFRIGERIOS Y PUNTOS DE CONTROL ================= */}
+      {managingCheckpointsReg && (() => {
+        let cps: any[] = []
+        try {
+          cps = typeof managingCheckpointsReg.checkpoints === 'string'
+            ? JSON.parse(managingCheckpointsReg.checkpoints || '[]')
+            : (managingCheckpointsReg.checkpoints || [])
+          if (!Array.isArray(cps)) cps = []
+        } catch {
+          cps = []
+        }
+
+        const fullName = [
+          managingCheckpointsReg.person?.firstName,
+          managingCheckpointsReg.person?.middleName,
+          managingCheckpointsReg.person?.lastName,
+          managingCheckpointsReg.person?.secondLastName
+        ].filter(Boolean).join(' ')
+
+        let photoUrl: string | null = null
+        try {
+          const add = JSON.parse(managingCheckpointsReg.person?.additionalData || '{}')
+          photoUrl = add.fotoIngreso || add.foto || null
+          if (!photoUrl) {
+            const ing = cps.find((c: any) => c.name === 'Ingreso' && c.evidenceUrl)
+            if (ing) photoUrl = ing.evidenceUrl
+          }
+        } catch(e) {}
+
+        const kitScan = cps.find((c: any) => isKitName(c?.name))
+        const hasKitVal = !!kitScan
+
+        // Helper to get meal icon
+        const getMealIcon = (mealName: string) => {
+          const lower = mealName.toLowerCase()
+          if (lower.includes('desayuno')) return '☕'
+          if (lower.includes('almuerzo')) return '🍱'
+          if (lower.includes('tarde')) return '🍪'
+          if (lower.includes('cena')) return '🍲'
+          if (lower.includes('refrigerio')) return '🍪'
+          if (lower.includes('kit') || lower.includes('bienvenida')) return '🎒'
+          if (lower.includes('ingreso')) return '🚪'
+          return '📍'
+        }
+
+        // Calculate progress
+        const totalPossible = eventCheckpoints.length
+        const totalDelivered = cps.length
+
+        return (
+          <div style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(15, 23, 42, 0.75)',
+            backdropFilter: 'blur(4px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+            padding: '1rem'
+          }}>
+            <div className="animate-fade-in" style={{
+              backgroundColor: '#FFFFFF',
+              borderRadius: '16px',
+              maxWidth: '850px',
+              width: '100%',
+              maxHeight: '92vh',
+              display: 'flex',
+              flexDirection: 'column',
+              boxShadow: '0 25px 50px -12px rgba(0,0,0,0.5)',
+              overflow: 'hidden'
+            }}>
+              
+              {/* Header */}
+              <div style={{
+                padding: '1.25rem 1.5rem',
+                borderBottom: '1px solid #E2E8F0',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                backgroundColor: '#F8FAFC'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
+                  {photoUrl ? (
+                    <img 
+                      src={photoUrl} 
+                      alt="Foto" 
+                      style={{ width: '46px', height: '46px', borderRadius: '10px', objectFit: 'cover', border: '2px solid #CBD5E1' }} 
+                    />
+                  ) : (
+                    <div style={{ width: '46px', height: '46px', borderRadius: '10px', backgroundColor: '#E2E8F0', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, color: '#64748B', fontSize: '1.1rem' }}>
+                      {managingCheckpointsReg.person?.firstName?.[0] || 'P'}
+                    </div>
+                  )}
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <h3 style={{ fontSize: '1.2rem', fontWeight: 800, margin: 0, color: '#0F172A' }}>
+                        {fullName}
+                      </h3>
+                      <span style={{
+                        fontSize: '0.72rem',
+                        fontWeight: 800,
+                        padding: '0.15rem 0.5rem',
+                        borderRadius: '12px',
+                        backgroundColor: managingCheckpointsReg.status === 'ASISTIO' ? '#DCFCE7' : '#EFF6FF',
+                        color: managingCheckpointsReg.status === 'ASISTIO' ? '#15803D' : '#1D4ED8',
+                        border: `1px solid ${managingCheckpointsReg.status === 'ASISTIO' ? '#86EFAC' : '#BFDBFE'}`
+                      }}>
+                        {managingCheckpointsReg.status}
+                      </span>
+                    </div>
+                    <p style={{ fontSize: '0.8rem', color: '#64748B', margin: '0.15rem 0 0' }}>
+                      {managingCheckpointsReg.person?.documentType} {managingCheckpointsReg.person?.documentNumber} • {managingCheckpointsReg.person?.municipality || 'Municipio no reg.'}
+                    </p>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#64748B' }}>Entregas registradas</div>
+                    <div style={{ fontSize: '0.95rem', fontWeight: 800, color: '#0F172A' }}>
+                      {totalDelivered} / {totalPossible}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setManagingCheckpointsReg(null)}
+                    style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#64748B', padding: '0.25rem' }}
+                  >
+                    <X size={24} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Instructions banner */}
+              <div style={{
+                backgroundColor: '#EFF6FF',
+                padding: '0.75rem 1.25rem',
+                borderBottom: '1px solid #DBEAFE',
+                fontSize: '0.82rem',
+                color: '#1E40AF',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                gap: '0.5rem'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  <Clock size={16} color="#2563EB" />
+                  <span>
+                    <strong>Marcación con Fecha y Hora Ajustable:</strong> Puedes marcar los refrigerios pendientes o ajustar la fecha y hora exacta en que se entregaron.
+                  </span>
+                </div>
+                <span style={{ fontSize: '0.75rem', fontWeight: 700, backgroundColor: '#DBEAFE', padding: '0.15rem 0.5rem', borderRadius: '12px' }}>
+                  {totalDelivered} entregados
+                </span>
+              </div>
+
+              {/* Body */}
+              <div style={{ overflowY: 'auto', padding: '1.25rem 1.5rem', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                
+                {/* 1. SECCIÓN KIT DE BIENVENIDA */}
+                <div style={{
+                  backgroundColor: hasKitVal ? '#F0FDF4' : '#FFFBEB',
+                  borderRadius: '12px',
+                  padding: '1rem 1.25rem',
+                  border: `1.5px solid ${hasKitVal ? '#BBF7D0' : '#FDE68A'}`,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  flexWrap: 'wrap',
+                  gap: '0.75rem'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                    <div style={{ fontSize: '1.75rem' }}>🎒</div>
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                        <h4 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 800, color: hasKitVal ? '#166534' : '#92400E' }}>
+                          Kit de Bienvenida
+                        </h4>
+                        <span style={{
+                          fontSize: '0.7rem',
+                          fontWeight: 800,
+                          padding: '0.1rem 0.45rem',
+                          borderRadius: '12px',
+                          backgroundColor: hasKitVal ? '#DCFCE7' : '#FEF3C7',
+                          color: hasKitVal ? '#15803D' : '#B45309',
+                          border: `1px solid ${hasKitVal ? '#86EFAC' : '#FCD34D'}`
+                        }}>
+                          {hasKitVal ? 'ENTREGADO' : 'PENDIENTE'}
+                        </span>
+                      </div>
+                      {kitScan ? (
+                        <p style={{ margin: '0.2rem 0 0', fontSize: '0.8rem', color: '#15803D' }}>
+                          Entregado: {new Date(kitScan.timestamp).toLocaleDateString('es-CO', { timeZone: 'America/Bogota', weekday: 'short', day: 'numeric', month: 'short' })} a las {new Date(kitScan.timestamp).toLocaleTimeString('es-CO', { timeZone: 'America/Bogota', hour: '2-digit', minute: '2-digit', hour12: true })}
+                          {kitScan.attendedBy ? ` • Por: ${kitScan.attendedBy}` : ''}
+                        </p>
+                      ) : (
+                        <p style={{ margin: '0.2rem 0 0', fontSize: '0.8rem', color: '#B45309' }}>
+                          El kit aún no ha sido marcado para este participante.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+                    {hasKitVal ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const kitIdx = cps.findIndex((c: any) => isKitName(c?.name))
+                            if (kitIdx >= 0) handleOpenEditCheckpointDateTime(managingCheckpointsReg, kitIdx)
+                          }}
+                          style={{
+                            padding: '0.4rem 0.8rem',
+                            backgroundColor: '#FFFFFF',
+                            color: '#1D4ED8',
+                            border: '1px solid #BFDBFE',
+                            borderRadius: '8px',
+                            fontSize: '0.78rem',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.3rem'
+                          }}
+                        >
+                          <Edit3 size={13} />
+                          <span>Ajustar Fecha/Hora</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleKit(managingCheckpointsReg, false)}
+                          style={{
+                            padding: '0.4rem 0.75rem',
+                            backgroundColor: '#FEF2F2',
+                            color: '#DC2626',
+                            border: '1px solid #FECACA',
+                            borderRadius: '8px',
+                            fontSize: '0.78rem',
+                            fontWeight: 700,
+                            cursor: 'pointer'
+                          }}
+                        >
+                          Desmarcar
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleOpenMarkCheckpoint(managingCheckpointsReg, 'Kit de Bienvenida')}
+                        style={{
+                          padding: '0.45rem 0.9rem',
+                          backgroundColor: '#16A34A',
+                          color: '#FFFFFF',
+                          border: 'none',
+                          borderRadius: '8px',
+                          fontSize: '0.8rem',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.35rem',
+                          boxShadow: '0 2px 5px rgba(22, 163, 74, 0.3)'
+                        }}
+                      >
+                        <Plus size={14} />
+                        <span>Marcar Kit Entregado</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* 2. SECCIÓN REFRIGERIOS ORGANIZADOS POR DÍA */}
+                {eventDaysList && eventDaysList.length > 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    {eventDaysList.map((dayItem: any, dayIdx: number) => {
+                      return (
+                        <div key={dayIdx} style={{
+                          backgroundColor: '#FFFFFF',
+                          borderRadius: '12px',
+                          border: '1px solid #E2E8F0',
+                          padding: '1rem',
+                          boxShadow: '0 1px 3px rgba(0,0,0,0.03)'
+                        }}>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem', borderBottom: '1px solid #F1F5F9', paddingBottom: '0.5rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                              <Calendar size={16} color="#2563EB" />
+                              <h4 style={{ margin: 0, fontSize: '0.92rem', fontWeight: 800, color: '#0F172A' }}>
+                                {dayItem.day}
+                              </h4>
+                            </div>
+                            <span style={{ fontSize: '0.72rem', color: '#64748B' }}>
+                              {dayItem.meals.filter((m: string) => cps.some((c: any) => c.name === `${dayItem.day} - ${m}` || c.name === m)).length} de {dayItem.meals.length} entregados
+                            </span>
+                          </div>
+
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: '0.65rem' }}>
+                            {dayItem.meals.map((meal: string, mealIdx: number) => {
+                              const targetCpName = `${dayItem.day} - ${meal}`
+                              const existingIdx = cps.findIndex((c: any) => c.name === targetCpName || c.name === meal)
+                              const isDelivered = existingIdx >= 0
+                              const scanInfo = isDelivered ? cps[existingIdx] : null
+
+                              return (
+                                <div key={mealIdx} style={{
+                                  backgroundColor: isDelivered ? '#F0FDF4' : '#F8FAFC',
+                                  borderRadius: '10px',
+                                  border: `1.5px solid ${isDelivered ? '#86EFAC' : '#E2E8F0'}`,
+                                  padding: '0.75rem 0.85rem',
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  justifyContent: 'space-between',
+                                  gap: '0.5rem'
+                                }}>
+                                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.4rem' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                      <span style={{ fontSize: '1.2rem' }}>{getMealIcon(meal)}</span>
+                                      <div>
+                                        <div style={{ fontSize: '0.82rem', fontWeight: 800, color: isDelivered ? '#166534' : '#1E293B' }}>
+                                          {meal}
+                                        </div>
+                                        <div style={{ fontSize: '0.7rem', color: '#64748B' }}>
+                                          {dayItem.day}
+                                        </div>
+                                      </div>
+                                    </div>
+
+                                    <span style={{
+                                      fontSize: '0.68rem',
+                                      fontWeight: 800,
+                                      padding: '0.1rem 0.4rem',
+                                      borderRadius: '8px',
+                                      backgroundColor: isDelivered ? '#DCFCE7' : '#F1F5F9',
+                                      color: isDelivered ? '#15803D' : '#64748B',
+                                      border: `1px solid ${isDelivered ? '#BBF7D0' : '#CBD5E1'}`
+                                    }}>
+                                      {isDelivered ? '✅ Listo' : '⏳ Pendiente'}
+                                    </span>
+                                  </div>
+
+                                  {isDelivered && scanInfo ? (
+                                    <div style={{ borderTop: '1px dashed #BBF7D0', paddingTop: '0.4rem' }}>
+                                      <div style={{ fontSize: '0.7rem', color: '#166534', fontWeight: 600 }}>
+                                        {new Date(scanInfo.timestamp).toLocaleDateString('es-CO', { timeZone: 'America/Bogota', weekday: 'short', day: 'numeric', month: 'short' })} • {new Date(scanInfo.timestamp).toLocaleTimeString('es-CO', { timeZone: 'America/Bogota', hour: '2-digit', minute: '2-digit', hour12: true })}
+                                      </div>
+                                      {scanInfo.attendedBy && (
+                                        <div style={{ fontSize: '0.65rem', color: '#64748B', marginTop: '0.1rem' }}>
+                                          Por: {scanInfo.attendedBy}
+                                        </div>
+                                      )}
+
+                                      <div style={{ display: 'flex', gap: '0.35rem', marginTop: '0.4rem' }}>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleOpenEditCheckpointDateTime(managingCheckpointsReg, existingIdx)}
+                                          style={{
+                                            flex: 1,
+                                            padding: '0.25rem 0.4rem',
+                                            backgroundColor: '#FFFFFF',
+                                            color: '#1D4ED8',
+                                            border: '1px solid #BFDBFE',
+                                            borderRadius: '6px',
+                                            fontSize: '0.7rem',
+                                            fontWeight: 700,
+                                            cursor: 'pointer',
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                            gap: '0.2rem'
+                                          }}
+                                          title="Modificar fecha y hora de entrega"
+                                        >
+                                          <Edit3 size={11} />
+                                          <span>Ajustar Fecha</span>
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleRemoveCheckpoint(managingCheckpointsReg.id, existingIdx)}
+                                          style={{
+                                            padding: '0.25rem 0.45rem',
+                                            backgroundColor: '#FEF2F2',
+                                            color: '#DC2626',
+                                            border: '1px solid #FECACA',
+                                            borderRadius: '6px',
+                                            fontSize: '0.7rem',
+                                            fontWeight: 700,
+                                            cursor: 'pointer'
+                                          }}
+                                          title="Desmarcar entrega"
+                                        >
+                                          <Trash2 size={11} />
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div style={{ borderTop: '1px dashed #E2E8F0', paddingTop: '0.4rem' }}>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleOpenMarkCheckpoint(managingCheckpointsReg, targetCpName)}
+                                        style={{
+                                          width: '100%',
+                                          padding: '0.35rem 0.6rem',
+                                          backgroundColor: '#EFF6FF',
+                                          color: '#1D4ED8',
+                                          border: '1px solid #BFDBFE',
+                                          borderRadius: '6px',
+                                          fontSize: '0.75rem',
+                                          fontWeight: 700,
+                                          cursor: 'pointer',
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          justifyContent: 'center',
+                                          gap: '0.3rem'
+                                        }}
+                                      >
+                                        <Plus size={13} />
+                                        <span>Marcar Entrega</span>
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                ) : (
+                  /* Flat Checkpoints List fallback */
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '0.75rem' }}>
+                    {eventCheckpoints.filter((cp: string) => !isKitName(cp)).map((cpName: string, cpIdx: number) => {
+                      const existingIdx = cps.findIndex((c: any) => c.name === cpName)
+                      const isDelivered = existingIdx >= 0
+                      const scanInfo = isDelivered ? cps[existingIdx] : null
+
+                      return (
+                        <div key={cpIdx} style={{
+                          backgroundColor: isDelivered ? '#F0FDF4' : '#F8FAFC',
+                          borderRadius: '10px',
+                          border: `1.5px solid ${isDelivered ? '#86EFAC' : '#CBD5E1'}`,
+                          padding: '0.85rem',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          justifyContent: 'space-between',
+                          gap: '0.5rem'
+                        }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                              <span>{getMealIcon(cpName)}</span>
+                              <strong style={{ fontSize: '0.85rem', color: isDelivered ? '#166534' : '#0F172A' }}>{cpName}</strong>
+                            </div>
+                            <span style={{
+                              fontSize: '0.7rem',
+                              fontWeight: 800,
+                              padding: '0.1rem 0.4rem',
+                              borderRadius: '8px',
+                              backgroundColor: isDelivered ? '#DCFCE7' : '#F1F5F9',
+                              color: isDelivered ? '#15803D' : '#64748B'
+                            }}>
+                              {isDelivered ? '✅ Listo' : '⏳ Pendiente'}
+                            </span>
+                          </div>
+
+                          {isDelivered && scanInfo ? (
+                            <div style={{ borderTop: '1px dashed #BBF7D0', paddingTop: '0.4rem' }}>
+                              <div style={{ fontSize: '0.72rem', color: '#166534', fontWeight: 600 }}>
+                                {new Date(scanInfo.timestamp).toLocaleDateString('es-CO', { timeZone: 'America/Bogota', weekday: 'short', day: 'numeric', month: 'short' })} • {new Date(scanInfo.timestamp).toLocaleTimeString('es-CO', { timeZone: 'America/Bogota', hour: '2-digit', minute: '2-digit', hour12: true })}
+                              </div>
+                              <div style={{ display: 'flex', gap: '0.35rem', marginTop: '0.4rem' }}>
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenEditCheckpointDateTime(managingCheckpointsReg, existingIdx)}
+                                  className="btn btn-outline"
+                                  style={{ flex: 1, padding: '0.25rem 0.4rem', fontSize: '0.7rem', fontWeight: 700 }}
+                                >
+                                  <Edit3 size={11} /> Ajustar Fecha
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveCheckpoint(managingCheckpointsReg.id, existingIdx)}
+                                  style={{ padding: '0.25rem 0.45rem', backgroundColor: '#FEF2F2', color: '#DC2626', border: '1px solid #FECACA', borderRadius: '6px', fontSize: '0.7rem', cursor: 'pointer' }}
+                                >
+                                  <Trash2 size={11} />
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => handleOpenMarkCheckpoint(managingCheckpointsReg, cpName)}
+                              style={{
+                                width: '100%',
+                                padding: '0.35rem 0.6rem',
+                                backgroundColor: '#EFF6FF',
+                                color: '#1D4ED8',
+                                border: '1px solid #BFDBFE',
+                                borderRadius: '6px',
+                                fontSize: '0.75rem',
+                                fontWeight: 700,
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                gap: '0.3rem'
+                              }}
+                            >
+                              <Plus size={13} />
+                              <span>Marcar Entrega</span>
+                            </button>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+
+                {/* 3. MARCAR PUNTO ADICIONAL O PERSONALIZADO */}
+                <div style={{
+                  backgroundColor: '#F8FAFC',
+                  borderRadius: '12px',
+                  padding: '1rem',
+                  border: '1px dashed #CBD5E1',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  flexWrap: 'wrap',
+                  gap: '0.75rem'
+                }}>
+                  <div style={{ flex: 1, minWidth: '200px' }}>
+                    <label style={{ fontSize: '0.78rem', fontWeight: 800, color: '#475569', display: 'block', marginBottom: '0.25rem' }}>
+                      + Marcar Entrega Adicional o Punto Especial:
+                    </label>
+                    <input
+                      type="text"
+                      value={customCheckpointInput}
+                      onChange={e => setCustomCheckpointInput(e.target.value)}
+                      placeholder="Ej: Refrigerio Extra, Certificado, etc."
+                      style={{
+                        width: '100%',
+                        padding: '0.45rem 0.75rem',
+                        fontSize: '0.82rem',
+                        borderRadius: '6px',
+                        border: '1px solid #CBD5E1',
+                        backgroundColor: '#FFFFFF'
+                      }}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const clean = customCheckpointInput.trim()
+                      if (!clean) {
+                        showToast('error', 'Escribe el nombre del punto o refrigerio adicional.')
+                        return
+                      }
+                      handleOpenMarkCheckpoint(managingCheckpointsReg, clean)
+                      setCustomCheckpointInput('')
+                    }}
+                    style={{
+                      padding: '0.5rem 1rem',
+                      backgroundColor: '#2563EB',
+                      color: '#FFFFFF',
+                      border: 'none',
+                      borderRadius: '8px',
+                      fontSize: '0.8rem',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      alignSelf: 'flex-end',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.35rem'
+                    }}
+                  >
+                    <Plus size={14} />
+                    <span>Continuar y Elegir Fecha</span>
+                  </button>
+                </div>
+
+              </div>
+
+              {/* Footer */}
+              <div style={{
+                padding: '1rem 1.5rem',
+                borderTop: '1px solid #E2E8F0',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                backgroundColor: '#F8FAFC'
+              }}>
+                <div style={{ fontSize: '0.8rem', color: '#64748B' }}>
+                  Total entregas de este asistente: <strong>{totalDelivered}</strong>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setManagingCheckpointsReg(null)}
+                  className="btn btn-primary"
+                  style={{ padding: '0.5rem 1.25rem', fontSize: '0.85rem', fontWeight: 700, backgroundColor: '#0F172A' }}
+                >
+                  Listo / Cerrar
+                </button>
+              </div>
+
+            </div>
+          </div>
+        )
+      })()}
+
+      {/* ================= MODAL: AJUSTAR FECHA Y HORA DE MARCADO ================= */}
+      {markingModal && (() => {
+        const pName = [
+          markingModal.reg.person?.firstName,
+          markingModal.reg.person?.middleName,
+          markingModal.reg.person?.lastName,
+          markingModal.reg.person?.secondLastName
+        ].filter(Boolean).join(' ')
+
+        // Preset event days
+        const eventDays = eventDaysList.map((d: any) => d.day)
+
+        // Helper to quickly change date to a preset day
+        const applyDayPreset = (dayName: string) => {
+          const matchDay = dayName.match(/\b(2[0-9]|1[0-9]|[1-9])\b/)
+          if (matchDay) {
+            const dayNum = matchDay[1].padStart(2, '0')
+            const currentParts = (markingModal.dateTimeValue || '').split('T')
+            const currentHour = currentParts[1] || '10:30'
+            setMarkingModal({
+              ...markingModal,
+              dateTimeValue: `2026-10-${dayNum}T${currentHour}`
+            })
+          }
+        }
+
+        const applyNow = () => {
+          setMarkingModal({
+            ...markingModal,
+            dateTimeValue: toDatetimeLocalValue(new Date())
+          })
+        }
+
+        return (
+          <div style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(15, 23, 42, 0.8)',
+            backdropFilter: 'blur(4px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10000,
+            padding: '1rem'
+          }}>
+            <div className="animate-fade-in" style={{
+              backgroundColor: '#FFFFFF',
+              borderRadius: '16px',
+              maxWidth: '520px',
+              width: '100%',
+              boxShadow: '0 25px 50px -12px rgba(0,0,0,0.5)',
+              overflow: 'hidden'
+            }}>
+              
+              {/* Header */}
+              <div style={{
+                padding: '1.25rem 1.5rem',
+                borderBottom: '1px solid #E2E8F0',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                backgroundColor: '#F8FAFC'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <Clock size={20} color="#2563EB" />
+                  <div>
+                    <h3 style={{ fontSize: '1.15rem', fontWeight: 800, margin: 0, color: '#0F172A' }}>
+                      {markingModal.isEdit ? 'Modificar Fecha y Hora' : 'Marcar Entrega'}
+                    </h3>
+                    <p style={{ margin: '0.15rem 0 0', fontSize: '0.78rem', color: '#64748B' }}>
+                      {markingModal.checkpointName}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setMarkingModal(null)}
+                  style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#64748B' }}
+                >
+                  <X size={22} />
+                </button>
+              </div>
+
+              {/* Form Body */}
+              <div style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                
+                {/* Attendee Info Banner */}
+                <div style={{ backgroundColor: '#F1F5F9', padding: '0.75rem 1rem', borderRadius: '10px', border: '1px solid #E2E8F0' }}>
+                  <span style={{ fontSize: '0.7rem', fontWeight: 800, color: '#64748B', textTransform: 'uppercase' }}>Participante:</span>
+                  <div style={{ fontSize: '0.92rem', fontWeight: 800, color: '#0F172A' }}>{pName}</div>
+                  <div style={{ fontSize: '0.78rem', color: '#64748B' }}>
+                    {markingModal.reg.person?.documentType} {markingModal.reg.person?.documentNumber}
+                  </div>
+                </div>
+
+                {/* Date & Time Picker */}
+                <div>
+                  <label style={{ fontSize: '0.85rem', fontWeight: 800, color: '#1E293B', display: 'block', marginBottom: '0.4rem' }}>
+                    📅 Fecha y Hora de la Entrega: *
+                  </label>
+                  <p style={{ fontSize: '0.75rem', color: '#64748B', margin: '0 0 0.5rem 0' }}>
+                    Indica el momento exacto en que se entregó (puedes elegir cualquier día u hora pasada):
+                  </p>
+                  <input
+                    type="datetime-local"
+                    value={markingModal.dateTimeValue}
+                    onChange={e => setMarkingModal({ ...markingModal, dateTimeValue: e.target.value })}
+                    required
+                    style={{
+                      width: '100%',
+                      padding: '0.65rem 0.85rem',
+                      fontSize: '0.95rem',
+                      fontWeight: 700,
+                      borderRadius: '8px',
+                      border: '2px solid #2563EB',
+                      backgroundColor: '#FFFFFF',
+                      color: '#0F172A',
+                      outline: 'none'
+                    }}
+                  />
+
+                  {/* Quick Preset Buttons */}
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', marginTop: '0.6rem', alignItems: 'center' }}>
+                    <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#64748B', marginRight: '0.2rem' }}>
+                      Acceso rápido:
+                    </span>
+                    <button
+                      type="button"
+                      onClick={applyNow}
+                      style={{
+                        padding: '0.25rem 0.55rem',
+                        fontSize: '0.72rem',
+                        fontWeight: 700,
+                        backgroundColor: '#F1F5F9',
+                        border: '1px solid #CBD5E1',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        color: '#334155'
+                      }}
+                    >
+                      ⏱️ Ahora mismo
+                    </button>
+
+                    {eventDays.map((dayName: string, dIdx: number) => (
+                      <button
+                        key={dIdx}
+                        type="button"
+                        onClick={() => applyDayPreset(dayName)}
+                        style={{
+                          padding: '0.25rem 0.55rem',
+                          fontSize: '0.72rem',
+                          fontWeight: 700,
+                          backgroundColor: '#EFF6FF',
+                          border: '1px solid #BFDBFE',
+                          borderRadius: '6px',
+                          cursor: 'pointer',
+                          color: '#1D4ED8'
+                        }}
+                      >
+                        📅 {dayName}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Operator / Attended By */}
+                <div>
+                  <label style={{ fontSize: '0.82rem', fontWeight: 700, color: '#334155', display: 'block', marginBottom: '0.35rem' }}>
+                    👤 Registrado / Atendido por:
+                  </label>
+                  <input
+                    type="text"
+                    value={markingModal.attendedBy}
+                    onChange={e => setMarkingModal({ ...markingModal, attendedBy: e.target.value })}
+                    placeholder="Ej: Administrador, Operador, etc."
+                    style={{
+                      width: '100%',
+                      padding: '0.5rem 0.75rem',
+                      fontSize: '0.85rem',
+                      borderRadius: '8px',
+                      border: '1px solid #CBD5E1'
+                    }}
+                  />
+                </div>
+
+              </div>
+
+              {/* Footer */}
+              <div style={{
+                padding: '1rem 1.5rem',
+                borderTop: '1px solid #E2E8F0',
+                display: 'flex',
+                justifyContent: 'flex-end',
+                gap: '0.75rem',
+                backgroundColor: '#F8FAFC'
+              }}>
+                <button
+                  type="button"
+                  onClick={() => setMarkingModal(null)}
+                  className="btn btn-outline"
+                  style={{ padding: '0.55rem 1.1rem', fontSize: '0.85rem', fontWeight: 600 }}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveCheckpointDateTime}
+                  className="btn btn-primary"
+                  style={{
+                    padding: '0.55rem 1.35rem',
+                    fontSize: '0.85rem',
+                    fontWeight: 700,
+                    backgroundColor: '#16A34A',
+                    borderColor: '#16A34A',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.4rem',
+                    boxShadow: '0 2px 5px rgba(22, 163, 74, 0.3)'
+                  }}
+                >
+                  <CheckCircle2 size={16} />
+                  <span>{markingModal.isEdit ? 'Actualizar Fecha y Hora' : 'Confirmar y Guardar Entrega'}</span>
+                </button>
+              </div>
+
+            </div>
+          </div>
+        )
+      })()}
 
     </div>
   )

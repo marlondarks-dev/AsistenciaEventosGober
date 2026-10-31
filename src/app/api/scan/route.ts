@@ -5,7 +5,7 @@ import prisma from '@/lib/prisma'
 export async function POST(request: Request) {
   try {
     const data = await request.json()
-    const { qrToken, eventId, checkpoint, attendedBy } = data
+    const { qrToken, eventId, checkpoint, attendedBy, customTimestamp } = data
 
     if (!qrToken || !eventId) {
       return NextResponse.json({ error: 'Faltan parámetros' }, { status: 400 })
@@ -149,7 +149,7 @@ export async function POST(request: Request) {
        }, { status: 409 })
     }
 
-    const now = new Date()
+    const now = customTimestamp ? new Date(customTimestamp) : new Date()
     const nowColombia = now.toLocaleString('es-CO', { 
       timeZone: 'America/Bogota',
       year: 'numeric',
@@ -175,7 +175,7 @@ export async function POST(request: Request) {
       where: { id: registration.id },
       data: {
         status: 'ASISTIO',
-        attendedAt: registration.attendedAt || new Date(),
+        attendedAt: registration.attendedAt || now,
         attendedBy: attendedBy || registration.attendedBy || 'Lector de QR',
         checkpoints: JSON.stringify(cpArray)
       },

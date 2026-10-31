@@ -83,6 +83,20 @@ export default function ClientScanner({
   const operatorNameRef = useRef(operatorName)
   const executeScanRef = useRef<(val: string) => Promise<void>>(async () => {})
 
+  // Custom retroactive datetime state
+  const [useCustomTime, setUseCustomTime] = useState(false)
+  const [customDateTime, setCustomDateTime] = useState('')
+  const customDateTimeRef = useRef(customDateTime)
+  const useCustomTimeRef = useRef(useCustomTime)
+
+  useEffect(() => {
+    customDateTimeRef.current = customDateTime
+  }, [customDateTime])
+
+  useEffect(() => {
+    useCustomTimeRef.current = useCustomTime
+  }, [useCustomTime])
+
   useEffect(() => {
     activeCheckpointRef.current = activeCheckpoint
   }, [activeCheckpoint])
@@ -247,6 +261,10 @@ export default function ClientScanner({
     const targetCheckpoint = activeCheckpointRef.current
     const targetOperator = operatorNameRef.current
 
+    const customTimestamp = useCustomTimeRef.current && customDateTimeRef.current
+      ? new Date(customDateTimeRef.current).toISOString()
+      : undefined
+
     try {
       const res = await fetch('/api/scan', {
         method: 'POST',
@@ -255,7 +273,8 @@ export default function ClientScanner({
           qrToken: cleanToken, 
           eventId, 
           checkpoint: targetCheckpoint,
-          attendedBy: targetOperator 
+          attendedBy: targetOperator,
+          customTimestamp
         })
       })
       
@@ -582,6 +601,70 @@ export default function ClientScanner({
               )
             })}
           </div>
+        </div>
+
+        {/* RETROACTIVE / CUSTOM DATE & TIME CONTROL */}
+        <div style={{
+          backgroundColor: '#1E293B',
+          borderRadius: '14px',
+          padding: '0.75rem 1rem',
+          border: '1px solid #334155',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '0.5rem'
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#CBD5E1', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+              <span>⏱️</span>
+              <span>Ajustar fecha y hora de marcado:</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                if (!useCustomTime && !customDateTime) {
+                  const nowLocal = new Date().toISOString().slice(0, 16)
+                  setCustomDateTime(nowLocal)
+                }
+                setUseCustomTime(!useCustomTime)
+              }}
+              style={{
+                fontSize: '0.72rem',
+                fontWeight: 700,
+                padding: '0.25rem 0.65rem',
+                borderRadius: '20px',
+                border: 'none',
+                cursor: 'pointer',
+                backgroundColor: useCustomTime ? '#0284C7' : '#334155',
+                color: '#FFFFFF'
+              }}
+            >
+              {useCustomTime ? 'Modo Retroactivo ACTIVO' : 'Usar Fecha Actual'}
+            </button>
+          </div>
+
+          {useCustomTime && (
+            <div style={{ paddingTop: '0.4rem', borderTop: '1px dashed #334155', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+              <div style={{ fontSize: '0.72rem', color: '#94A3B8' }}>
+                Todos los escaneos o ingresos se guardarán con esta fecha y hora:
+              </div>
+              <input
+                type="datetime-local"
+                value={customDateTime}
+                onChange={e => setCustomDateTime(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '0.5rem 0.75rem',
+                  borderRadius: '8px',
+                  backgroundColor: '#0F172A',
+                  color: '#FFFFFF',
+                  border: '1.5px solid #0284C7',
+                  fontSize: '0.9rem',
+                  fontWeight: 700,
+                  outline: 'none'
+                }}
+              />
+            </div>
+          )}
         </div>
 
         {/* CAMERA SCANNER AREA */}
