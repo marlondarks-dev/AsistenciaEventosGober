@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useMemo, useEffect } from 'react'
+import { flushSync } from 'react-dom'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { 
@@ -16,7 +17,10 @@ import {
   ShieldCheck, 
   AlertTriangle,
   PackageCheck,
-  Package
+  Package,
+  ExternalLink,
+  Copy,
+  Check
 } from 'lucide-react'
 
 interface ReportViewerProps {
@@ -98,19 +102,62 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
     })
   }, [registrations, statusFilter, kitFilter, search])
 
+  const [isStandalone, setIsStandalone] = useState(false)
+  const [copiedLink, setCopiedLink] = useState(false)
+
+  // Detect if running inside installed PWA (Standalone window)
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const isPWA = window.matchMedia('(display-mode: standalone)').matches || 
+                    (window.navigator as any).standalone === true
+      setIsStandalone(isPWA)
+    }
+  }, [])
+
+  // Keyboard shortcut Ctrl+P / Cmd+P
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') {
+        e.preventDefault()
+        handlePrint()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
+
   const handlePrint = () => {
-    setIsPrinting(true)
-    setTimeout(() => {
+    try {
       window.print()
-      setIsPrinting(false)
-    }, 250)
+    } catch (e) {
+      console.error('Error al abrir diálogo de impresión:', e)
+    }
+  }
+
+  const handleOpenInBrowser = () => {
+    if (typeof window !== 'undefined') {
+      window.open(window.location.href, '_blank', 'noopener,noreferrer')
+    }
+  }
+
+  const handleCopyLink = () => {
+    if (typeof window !== 'undefined') {
+      navigator.clipboard.writeText(window.location.href)
+      setCopiedLink(true)
+      setTimeout(() => setCopiedLink(false), 2500)
+    }
   }
 
   const handlePrintSingle = (documentNumber: string) => {
-    setSearch(documentNumber)
-    setTimeout(() => {
-      window.print()
-    }, 250)
+    try {
+      flushSync(() => {
+        setSearch(documentNumber)
+      })
+      handlePrint()
+    } catch {
+      setSearch(documentNumber)
+      handlePrint()
+    }
   }
 
   return (
@@ -325,7 +372,7 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
             <button
               type="button"
               onClick={handlePrint}
-              disabled={filteredRegistrations.length === 0 || isPrinting}
+              disabled={filteredRegistrations.length === 0}
               className="btn btn-primary"
               style={{
                 backgroundColor: '#2563EB',
@@ -345,8 +392,96 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
               <Printer size={18} />
               <span>Guardar PDF / Imprimir ({filteredRegistrations.length})</span>
             </button>
+
+            <button
+              type="button"
+              onClick={handleOpenInBrowser}
+              className="btn btn-outline"
+              title="Abrir en pestaña normal del navegador"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+                fontSize: '0.82rem',
+                fontWeight: 600,
+                padding: '0.55rem 0.85rem',
+                backgroundColor: '#F8FAFC',
+                borderColor: '#CBD5E1',
+                color: '#334155',
+                borderRadius: '8px',
+                cursor: 'pointer'
+              }}
+            >
+              <ExternalLink size={15} />
+              <span>Abrir en Navegador</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleCopyLink}
+              className="btn btn-outline"
+              title="Copiar enlace para pegar en Chrome o Edge"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+                fontSize: '0.82rem',
+                fontWeight: 600,
+                padding: '0.55rem 0.85rem',
+                backgroundColor: copiedLink ? '#ECFDF5' : '#F8FAFC',
+                borderColor: copiedLink ? '#10B981' : '#CBD5E1',
+                color: copiedLink ? '#047857' : '#334155',
+                borderRadius: '8px',
+                cursor: 'pointer'
+              }}
+            >
+              {copiedLink ? <Check size={15} color="#10B981" /> : <Copy size={15} />}
+              <span>{copiedLink ? '¡Enlace Copiado!' : 'Copiar Enlace'}</span>
+            </button>
           </div>
         </div>
+
+        {/* PWA App Mode Banner */}
+        {isStandalone && (
+          <div style={{
+            maxWidth: '1200px',
+            margin: '0.6rem auto 0',
+            backgroundColor: '#EFF6FF',
+            border: '1px solid #BFDBFE',
+            borderRadius: '8px',
+            padding: '0.5rem 0.85rem',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '0.75rem',
+            fontSize: '0.8rem',
+            color: '#1E40AF'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <AlertTriangle size={16} color="#2563EB" />
+              <span>
+                <strong>Modo Aplicación (PWA):</strong> Si el cuadro de impresión no se abre directamente en tu app instalada, haz clic en <strong>Abrir en Navegador</strong> o copia el enlace y pégalo en una pestaña de Chrome/Edge.
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={handleCopyLink}
+              style={{
+                backgroundColor: '#2563EB',
+                color: '#FFFFFF',
+                border: 'none',
+                padding: '0.3rem 0.65rem',
+                borderRadius: '6px',
+                fontSize: '0.75rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+                whiteSpace: 'nowrap'
+              }}
+            >
+              {copiedLink ? '¡Copiado!' : 'Copiar Enlace'}
+            </button>
+          </div>
+        )}
 
         {/* Filter Toolbar */}
         <div style={{
