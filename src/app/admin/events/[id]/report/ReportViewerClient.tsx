@@ -20,7 +20,9 @@ import {
   Package,
   ExternalLink,
   Copy,
-  Check
+  Check,
+  Download,
+  Loader2
 } from 'lucide-react'
 
 interface ReportViewerProps {
@@ -145,6 +147,103 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
       navigator.clipboard.writeText(window.location.href)
       setCopiedLink(true)
       setTimeout(() => setCopiedLink(false), 2500)
+    }
+  }
+
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState(false)
+  const [pdfProgressText, setPdfProgressText] = useState('')
+
+  // Cargar html2pdf.js desde el archivo local /js/html2pdf.bundle.min.js
+  const loadHtml2Pdf = async (): Promise<any> => {
+    if (typeof window === 'undefined') return null
+    if ((window as any).html2pdf) return (window as any).html2pdf
+    return new Promise((resolve, reject) => {
+      const existing = document.getElementById('html2pdf-script')
+      if (existing) {
+        existing.addEventListener('load', () => resolve((window as any).html2pdf))
+        return
+      }
+      const script = document.createElement('script')
+      script.id = 'html2pdf-script'
+      script.src = '/js/html2pdf.bundle.min.js'
+      script.onload = () => resolve((window as any).html2pdf)
+      script.onerror = () => reject(new Error('No se pudo cargar el motor local de PDF'))
+      document.head.appendChild(script)
+    })
+  }
+
+  // Descargar todas las fichas filtradas en un archivo PDF real
+  const handleDownloadPdf = async () => {
+    try {
+      setIsGeneratingPdf(true)
+      setPdfProgressText('Iniciando generador...')
+      const html2pdf = await loadHtml2Pdf()
+      if (!html2pdf) throw new Error('Generador de PDF no disponible')
+
+      const element = document.getElementById('printable-report-container')
+      if (!element) throw new Error('No se encontró el contenedor de fichas')
+
+      setPdfProgressText('Generando archivo PDF...')
+      const safeEventName = (event.name || 'Evento').replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 30)
+
+      const opt = {
+        margin: [10, 8, 10, 8],
+        filename: `Fichas_${safeEventName}.pdf`,
+        image: { type: 'jpeg', quality: 0.95 },
+        html2canvas: { 
+          scale: 2, 
+          useCORS: true, 
+          logging: false,
+          scrollY: 0
+        },
+        jsPDF: { unit: 'mm', format: 'letter', orientation: 'portrait' },
+        pagebreak: { mode: ['css', 'legacy'] }
+      }
+
+      await html2pdf().set(opt).from(element).save()
+    } catch (err: any) {
+      console.error('Error al generar PDF:', err)
+      alert('Error al descargar el PDF: ' + (err?.message || 'Inténtalo de nuevo'))
+    } finally {
+      setIsGeneratingPdf(false)
+      setPdfProgressText('')
+    }
+  }
+
+  // Descargar una ficha individual en PDF
+  const handleDownloadSinglePdf = async (regId: string, participantName: string) => {
+    try {
+      setIsGeneratingPdf(true)
+      setPdfProgressText('Generando ficha...')
+      const html2pdf = await loadHtml2Pdf()
+      if (!html2pdf) throw new Error('Generador de PDF no disponible')
+
+      const element = document.getElementById(`ficha-${regId}`)
+      if (!element) throw new Error('No se encontró la ficha del participante')
+
+      const safeName = (participantName || 'Participante').replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 30)
+
+      const opt = {
+        margin: [10, 8, 10, 8],
+        filename: `Ficha_${safeName}.pdf`,
+        image: { type: 'jpeg', quality: 0.95 },
+        html2canvas: { 
+          scale: 2, 
+          useCORS: true, 
+          logging: false,
+          scrollY: 0
+        },
+        jsPDF: { unit: 'mm', format: 'letter', orientation: 'portrait' },
+        pagebreak: { mode: ['css', 'legacy'] }
+      }
+
+      await html2pdf().set(opt).from(element).save()
+    } catch (err: any) {
+      console.error('Error al generar PDF individual:', err)
+      alert('Error: ' + (err?.message || 'Inténtalo de nuevo'))
+    } finally {
+      setIsGeneratingPdf(false)
+      setPdfProgressText('')
     }
   }
 
@@ -369,28 +468,54 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
               <span>1 ficha por hoja</span>
             </label>
 
+            {/* Primary Action: Direct PDF Download */}
             <button
               type="button"
-              onClick={handlePrint}
-              disabled={filteredRegistrations.length === 0}
+              onClick={handleDownloadPdf}
+              disabled={filteredRegistrations.length === 0 || isGeneratingPdf}
               className="btn btn-primary"
               style={{
-                backgroundColor: '#2563EB',
+                backgroundColor: '#16A34A',
                 color: '#FFFFFF',
                 padding: '0.6rem 1.25rem',
                 borderRadius: '8px',
                 fontWeight: 700,
                 fontSize: '0.9rem',
                 border: 'none',
-                cursor: 'pointer',
+                cursor: isGeneratingPdf ? 'wait' : 'pointer',
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: '0.5rem',
-                boxShadow: '0 4px 10px rgba(37, 99, 235, 0.25)'
+                boxShadow: '0 4px 10px rgba(22, 163, 74, 0.3)'
               }}
             >
-              <Printer size={18} />
-              <span>Guardar PDF / Imprimir ({filteredRegistrations.length})</span>
+              {isGeneratingPdf ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
+              <span>{isGeneratingPdf ? (pdfProgressText || 'Generando...') : `Descargar PDF (${filteredRegistrations.length})`}</span>
+            </button>
+
+            {/* Secondary Action: Print via Browser */}
+            <button
+              type="button"
+              onClick={handlePrint}
+              disabled={filteredRegistrations.length === 0 || isGeneratingPdf}
+              className="btn btn-outline"
+              title="Abrir vista de impresión tradicional"
+              style={{
+                backgroundColor: '#FFFFFF',
+                color: '#2563EB',
+                borderColor: '#BFDBFE',
+                padding: '0.55rem 0.95rem',
+                borderRadius: '8px',
+                fontWeight: 600,
+                fontSize: '0.85rem',
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.4rem'
+              }}
+            >
+              <Printer size={16} />
+              <span>Imprimir</span>
             </button>
 
             <button
@@ -641,7 +766,7 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
       </div>
 
       {/* PRINTABLE REPORT DOCUMENT CONTAINER */}
-      <div style={{ maxWidth: '900px', margin: '1.5rem auto', padding: '0 1rem' }}>
+      <div id="printable-report-container" style={{ maxWidth: '900px', margin: '1.5rem auto', padding: '1rem', backgroundColor: '#FFFFFF', borderRadius: '8px' }}>
         
         {/* Cover / Header Section */}
         <div style={{ textAlign: 'center', marginBottom: '1.5rem', paddingBottom: '1.25rem', borderBottom: '2px solid #E2E8F0' }}>
@@ -791,29 +916,56 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
                     <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>ID Registro</div>
                     <div style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: '0.85rem', color: '#1E293B' }}>{reg.id.slice(-8).toUpperCase()}</div>
                     
-                    {/* Quick Print Single Ficha button (Hidden on print) */}
-                    <button
-                      type="button"
-                      onClick={() => handlePrintSingle(p.documentNumber || reg.id)}
-                      className="no-print btn btn-outline"
-                      title="Imprimir solo esta ficha"
-                      style={{
-                        padding: '0.25rem 0.5rem',
-                        fontSize: '0.75rem',
-                        fontWeight: 600,
-                        backgroundColor: '#F8FAFC',
-                        borderColor: '#CBD5E1',
-                        color: '#2563EB',
-                        marginTop: '0.25rem',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '0.25rem',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      <Printer size={13} />
-                      <span>Imprimir individual</span>
-                    </button>
+                    {/* Quick Actions (Hidden during PDF export and print) */}
+                    <div className="no-print" data-html2canvas-ignore="true" style={{ display: 'flex', gap: '0.35rem', marginTop: '0.35rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadSinglePdf(reg.id, fullName || p.documentNumber || 'Ficha')}
+                        disabled={isGeneratingPdf}
+                        className="btn btn-outline"
+                        title="Descargar esta ficha en archivo PDF"
+                        style={{
+                          padding: '0.25rem 0.55rem',
+                          fontSize: '0.75rem',
+                          fontWeight: 700,
+                          backgroundColor: '#F0FDF4',
+                          borderColor: '#86EFAC',
+                          color: '#15803D',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.25rem',
+                          cursor: isGeneratingPdf ? 'wait' : 'pointer',
+                          borderRadius: '6px'
+                        }}
+                      >
+                        <Download size={13} />
+                        <span>Descargar PDF</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handlePrintSingle(p.documentNumber || reg.id)}
+                        disabled={isGeneratingPdf}
+                        className="btn btn-outline"
+                        title="Imprimir solo esta ficha"
+                        style={{
+                          padding: '0.25rem 0.5rem',
+                          fontSize: '0.75rem',
+                          fontWeight: 600,
+                          backgroundColor: '#F8FAFC',
+                          borderColor: '#CBD5E1',
+                          color: '#2563EB',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.25rem',
+                          cursor: 'pointer',
+                          borderRadius: '6px'
+                        }}
+                      >
+                        <Printer size={13} />
+                        <span>Imprimir</span>
+                      </button>
+                    </div>
                   </div>
                 </div>
 
