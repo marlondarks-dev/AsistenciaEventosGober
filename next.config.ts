@@ -5,6 +5,9 @@ process.env.TZ = 'America/Bogota';
 const nextConfig: NextConfig = {
   cacheComponents: true,
   partialPrefetching: true,
+  experimental: {
+    agentUpgrade: 'security',
+  },
   allowedDevOrigins: [
     '192.168.0.194',
     '192.168.0.194:3002',
