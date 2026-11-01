@@ -103,7 +103,7 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
     setTimeout(() => {
       window.print()
       setIsPrinting(false)
-    }, 100)
+    }, 250)
   }
 
   const handlePrintSingle = (documentNumber: string) => {
@@ -145,8 +145,6 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
             border-bottom: 2px solid #f1f5f9;
             padding-bottom: 0.75rem;
             margin-bottom: 1rem;
-            break-inside: avoid;
-            page-break-inside: avoid;
           }
           .ficha-title {
             font-size: 1.25rem;
@@ -177,8 +175,6 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
             padding: 0.5rem 0.75rem;
             border-radius: 6px;
             border: 1px solid #e2e8f0;
-            break-inside: avoid;
-            page-break-inside: avoid;
           }
           .info-label {
             font-size: 0.7rem;
@@ -206,8 +202,6 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
             border-radius: 6px;
             background: #ffffff;
             align-items: center;
-            break-inside: avoid;
-            page-break-inside: avoid;
           }
           .checkpoint-details {
             flex: 1;
@@ -234,8 +228,10 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
           }
           
           @media print {
-            body {
+            html, body {
               background-color: white !important;
+              color: #000000 !important;
+              overflow: visible !important;
             }
             .sidebar, header, nav, .no-print {
               display: none !important;
@@ -268,7 +264,7 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
               border: 1px solid #cbd5e1 !important;
             }
             @page {
-              margin: 1.2cm;
+              margin: 1cm;
               size: auto;
             }
           }

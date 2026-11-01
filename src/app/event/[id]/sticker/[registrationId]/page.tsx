@@ -155,6 +155,7 @@ export default async function StickerPage({ params }: { params: Promise<{ id: st
               min-height: 100vh;
               width: 100vw;
               height: 100vh;
+              overflow: auto;
             }
             .sticker-container {
               background: white;
@@ -168,10 +169,15 @@ export default async function StickerPage({ params }: { params: Promise<{ id: st
           }
           /* Print styles */
           @media print {
-            body {
+            html, body {
               width: 80mm !important;
               height: 40mm !important;
-              overflow: hidden !important;
+              margin: 0 !important;
+              padding: 0 !important;
+              overflow: visible !important;
+              background-color: white !important;
+              -webkit-print-color-adjust: exact !important;
+              print-color-adjust: exact !important;
             }
             .sticker-container {
               width: 80mm !important;
@@ -180,6 +186,8 @@ export default async function StickerPage({ params }: { params: Promise<{ id: st
               border: none !important;
               page-break-inside: avoid !important;
               page-break-after: avoid !important;
+              break-inside: avoid !important;
+              break-after: avoid !important;
             }
             .no-print {
               display: none !important;
