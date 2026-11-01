@@ -46,6 +46,7 @@ export async function GET(
             'Content-Type': contentType,
             'Content-Disposition': ext === '.pdf' || ext.startsWith('.jp') || ext === '.png' || ext === '.webp' ? `inline; filename="${safeFilename}"` : `attachment; filename="${safeFilename}"`,
             'Cache-Control': 'public, max-age=31536000, immutable',
+            'Access-Control-Allow-Origin': '*',
           },
         })
       }

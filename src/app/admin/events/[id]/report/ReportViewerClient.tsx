@@ -153,54 +153,103 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false)
   const [pdfProgressText, setPdfProgressText] = useState('')
 
-  // Cargar html2pdf.js desde el archivo local /js/html2pdf.bundle.min.js
-  const loadHtml2Pdf = async (): Promise<any> => {
-    if (typeof window === 'undefined') return null
-    if ((window as any).html2pdf) return (window as any).html2pdf
-    return new Promise((resolve, reject) => {
-      const existing = document.getElementById('html2pdf-script')
-      if (existing) {
-        existing.addEventListener('load', () => resolve((window as any).html2pdf))
-        return
-      }
-      const script = document.createElement('script')
-      script.id = 'html2pdf-script'
-      script.src = '/js/html2pdf.bundle.min.js'
-      script.onload = () => resolve((window as any).html2pdf)
-      script.onerror = () => reject(new Error('No se pudo cargar el motor local de PDF'))
-      document.head.appendChild(script)
-    })
+  // Cargar librerías locales de PDF (jsPDF + html2canvas)
+  const ensurePdfLibraries = async (): Promise<{ jsPDF: any; html2canvas: any }> => {
+    if (typeof window === 'undefined') throw new Error('Solo disponible en navegador')
+
+    const loadScript = (id: string, src: string): Promise<void> => {
+      return new Promise((resolve, reject) => {
+        if (document.getElementById(id)) {
+          resolve()
+          return
+        }
+        const s = document.createElement('script')
+        s.id = id
+        s.src = src
+        s.onload = () => resolve()
+        s.onerror = () => reject(new Error(`No se pudo cargar el archivo local ${src}`))
+        document.head.appendChild(s)
+      })
+    }
+
+    // Cargar ambas librerías locales en paralelo
+    await Promise.all([
+      loadScript('jspdf-script', '/js/jspdf.umd.min.js'),
+      loadScript('html2canvas-script', '/js/html2canvas.min.js')
+    ])
+
+    const jsPDF = (window as any).jspdf?.jsPDF || (window as any).jsPDF
+    const html2canvas = (window as any).html2canvas
+
+    if (!jsPDF || !html2canvas) {
+      throw new Error('Las librerías de generación de PDF no se inicializaron correctamente')
+    }
+
+    return { jsPDF, html2canvas }
   }
 
-  // Descargar todas las fichas filtradas en un archivo PDF real
+  // Descargar todas las fichas filtradas en un archivo PDF real (página por página)
   const handleDownloadPdf = async () => {
     try {
       setIsGeneratingPdf(true)
-      setPdfProgressText('Iniciando generador...')
-      const html2pdf = await loadHtml2Pdf()
-      if (!html2pdf) throw new Error('Generador de PDF no disponible')
+      setPdfProgressText('Iniciando generador de PDF...')
 
-      const element = document.getElementById('printable-report-container')
-      if (!element) throw new Error('No se encontró el contenedor de fichas')
+      const { jsPDF, html2canvas } = await ensurePdfLibraries()
 
-      setPdfProgressText('Generando archivo PDF...')
-      const safeEventName = (event.name || 'Evento').replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 30)
+      const container = document.getElementById('printable-report-container')
+      if (!container) throw new Error('No se encontró el contenedor de fichas')
 
-      const opt = {
-        margin: [10, 8, 10, 8],
-        filename: `Fichas_${safeEventName}.pdf`,
-        image: { type: 'jpeg', quality: 0.95 },
-        html2canvas: { 
-          scale: 2, 
-          useCORS: true, 
-          logging: false,
-          scrollY: 0
-        },
-        jsPDF: { unit: 'mm', format: 'letter', orientation: 'portrait' },
-        pagebreak: { mode: ['css', 'legacy'] }
+      const fichas = Array.from(container.querySelectorAll('.ficha')) as HTMLElement[]
+      if (fichas.length === 0) {
+        alert('No hay fichas para descargar con los filtros actuales.')
+        return
       }
 
-      await html2pdf().set(opt).from(element).save()
+      // Dimensiones de hoja Carta en mm: 215.9 x 279.4
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'letter',
+        compress: true
+      })
+
+      const pageWidth = 215.9
+      const pageHeight = 279.4
+      const margin = 10
+      const contentWidth = pageWidth - (margin * 2) // 195.9 mm
+
+      // Filtro para ignorar botones de acciones en el PDF
+      const ignoreElements = (node: Element) => {
+        return node.classList?.contains('no-print') || node.getAttribute?.('data-html2canvas-ignore') === 'true'
+      }
+
+      for (let i = 0; i < fichas.length; i++) {
+        setPdfProgressText(`Generando ficha ${i + 1} de ${fichas.length}...`)
+        const fichaEl = fichas[i]
+
+        const canvas = await html2canvas(fichaEl, {
+          scale: 2,
+          useCORS: true,
+          allowTaint: true,
+          backgroundColor: '#FFFFFF',
+          logging: false,
+          ignoreElements
+        })
+
+        const imgData = canvas.toDataURL('image/jpeg', 0.92)
+        const imgWidth = contentWidth
+        const imgHeight = (canvas.height * imgWidth) / canvas.width
+
+        if (i > 0) {
+          pdf.addPage()
+        }
+
+        pdf.addImage(imgData, 'JPEG', margin, margin, imgWidth, Math.min(imgHeight, pageHeight - (margin * 2)))
+      }
+
+      setPdfProgressText('Guardando archivo...')
+      const safeEventName = (event.name || 'Evento').replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 30)
+      pdf.save(`Fichas_Asistencia_${safeEventName}.pdf`)
     } catch (err: any) {
       console.error('Error al generar PDF:', err)
       alert('Error al descargar el PDF: ' + (err?.message || 'Inténtalo de nuevo'))
@@ -214,33 +263,46 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
   const handleDownloadSinglePdf = async (regId: string, participantName: string) => {
     try {
       setIsGeneratingPdf(true)
-      setPdfProgressText('Generando ficha...')
-      const html2pdf = await loadHtml2Pdf()
-      if (!html2pdf) throw new Error('Generador de PDF no disponible')
+      setPdfProgressText('Generando ficha individual...')
 
-      const element = document.getElementById(`ficha-${regId}`)
-      if (!element) throw new Error('No se encontró la ficha del participante')
+      const { jsPDF, html2canvas } = await ensurePdfLibraries()
+
+      const fichaEl = document.getElementById(`ficha-${regId}`)
+      if (!fichaEl) throw new Error('No se encontró la ficha del participante')
+
+      const canvas = await html2canvas(fichaEl, {
+        scale: 2,
+        useCORS: true,
+        allowTaint: true,
+        backgroundColor: '#FFFFFF',
+        logging: false,
+        ignoreElements: (node: Element) => {
+          return node.classList?.contains('no-print') || node.getAttribute?.('data-html2canvas-ignore') === 'true'
+        }
+      })
+
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'letter',
+        compress: true
+      })
+
+      const pageWidth = 215.9
+      const pageHeight = 279.4
+      const margin = 10
+      const contentWidth = pageWidth - (margin * 2)
+      const imgWidth = contentWidth
+      const imgHeight = (canvas.height * imgWidth) / canvas.width
+
+      const imgData = canvas.toDataURL('image/jpeg', 0.95)
+      pdf.addImage(imgData, 'JPEG', margin, margin, imgWidth, Math.min(imgHeight, pageHeight - (margin * 2)))
 
       const safeName = (participantName || 'Participante').replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 30)
-
-      const opt = {
-        margin: [10, 8, 10, 8],
-        filename: `Ficha_${safeName}.pdf`,
-        image: { type: 'jpeg', quality: 0.95 },
-        html2canvas: { 
-          scale: 2, 
-          useCORS: true, 
-          logging: false,
-          scrollY: 0
-        },
-        jsPDF: { unit: 'mm', format: 'letter', orientation: 'portrait' },
-        pagebreak: { mode: ['css', 'legacy'] }
-      }
-
-      await html2pdf().set(opt).from(element).save()
+      pdf.save(`Ficha_${safeName}.pdf`)
     } catch (err: any) {
       console.error('Error al generar PDF individual:', err)
-      alert('Error: ' + (err?.message || 'Inténtalo de nuevo'))
+      alert('Error al descargar la ficha en PDF: ' + (err?.message || 'Inténtalo de nuevo'))
     } finally {
       setIsGeneratingPdf(false)
       setPdfProgressText('')
