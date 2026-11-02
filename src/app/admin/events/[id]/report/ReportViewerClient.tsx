@@ -171,24 +171,141 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
     })
   }
 
-  // Pre-cargar logo institucional si está disponible
-  const loadLogoBase64 = async (): Promise<string | null> => {
+  // Pre-cargar logo institucional manteniendo su proporción original (2147x801)
+  const loadLogoInfo = async (): Promise<{ data: string; width: number; height: number } | null> => {
     try {
       const res = await fetch('/logo.png')
       if (!res.ok) return null
       const blob = await res.blob()
+
       return new Promise((resolve) => {
-        const reader = new FileReader()
-        reader.onloadend = () => resolve(reader.result as string)
-        reader.readAsDataURL(blob)
+        const img = new Image()
+        const objectUrl = URL.createObjectURL(blob)
+
+        img.onload = () => {
+          try {
+            URL.revokeObjectURL(objectUrl)
+            const canvas = document.createElement('canvas')
+            const w = 500
+            const h = Math.round((img.naturalHeight * w) / img.naturalWidth)
+            canvas.width = w
+            canvas.height = h
+            const ctx = canvas.getContext('2d')
+            if (!ctx) return resolve(null)
+            ctx.drawImage(img, 0, 0, w, h)
+            const data = canvas.toDataURL('image/png')
+            const pdfW = 44
+            const pdfH = (44 * img.naturalHeight) / img.naturalWidth // ~16.4 mm
+            resolve({ data, width: pdfW, height: pdfH })
+          } catch {
+            resolve(null)
+          }
+        }
+
+        img.onerror = () => {
+          URL.revokeObjectURL(objectUrl)
+          resolve(null)
+        }
+
+        img.src = objectUrl
       })
     } catch {
       return null
     }
   }
 
-  // Dibujado vectorial ultra-rápido de cada ficha (toma menos de 1 milisegundo por página)
-  const drawFichaVector = (pdf: any, reg: any, currentEvent: any, pageNum: number, totalPages: number, logoData: string | null) => {
+  // Descarga y optimiza fotos en memoria (redimensionando a máx 380px para que el PDF sea ligero y de alta resolución)
+  const imageMemoryCache = useMemo(() => new Map<string, string | null>(), [])
+
+  const fetchImageAsDataUrl = async (url: string | null | undefined, maxWidth = 380, quality = 0.82): Promise<string | null> => {
+    if (!url) return null
+    if (url.startsWith('data:image/')) return url
+    if (imageMemoryCache.has(url)) return imageMemoryCache.get(url)!
+
+    try {
+      const res = await fetch(url)
+      if (!res.ok) {
+        imageMemoryCache.set(url, null)
+        return null
+      }
+      const blob = await res.blob()
+
+      const dataUrl = await new Promise<string | null>((resolve) => {
+        const img = new Image()
+        const objectUrl = URL.createObjectURL(blob)
+
+        img.onload = () => {
+          try {
+            URL.revokeObjectURL(objectUrl)
+            const canvas = document.createElement('canvas')
+            let w = img.naturalWidth || img.width
+            let h = img.naturalHeight || img.height
+
+            if (w > maxWidth) {
+              h = Math.round((h * maxWidth) / w)
+              w = maxWidth
+            }
+
+            canvas.width = w
+            canvas.height = h
+            const ctx = canvas.getContext('2d')
+            if (!ctx) {
+              resolve(null)
+              return
+            }
+            ctx.drawImage(img, 0, 0, w, h)
+            resolve(canvas.toDataURL('image/jpeg', quality))
+          } catch {
+            resolve(null)
+          }
+        }
+
+        img.onerror = () => {
+          URL.revokeObjectURL(objectUrl)
+          resolve(null)
+        }
+
+        img.src = objectUrl
+      })
+
+      imageMemoryCache.set(url, dataUrl)
+      return dataUrl
+    } catch {
+      imageMemoryCache.set(url, null)
+      return null
+    }
+  }
+
+  // Ejecutor concurrente para precargar imágenes rápidamente
+  const runConcurrentPool = async <T, R>(
+    items: T[], 
+    fn: (item: T, index: number) => Promise<R>, 
+    concurrency = 12
+  ): Promise<R[]> => {
+    const results = new Array<R>(items.length)
+    let currentIndex = 0
+
+    const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+      while (currentIndex < items.length) {
+        const idx = currentIndex++
+        results[idx] = await fn(items[idx], idx)
+      }
+    })
+
+    await Promise.all(workers)
+    return results
+  }
+
+  // Dibujado vectorial ultra-elegante de cada ficha con fotos y diseño institucional
+  const drawFichaVector = (
+    pdf: any, 
+    reg: any, 
+    currentEvent: any, 
+    pageNum: number, 
+    totalPages: number, 
+    logoInfo: { data: string; width: number; height: number } | null,
+    imagesMap: Map<string, string | null>
+  ) => {
     const p = reg.person || {}
     const fullName = [p.firstName, p.middleName, p.lastName, p.secondLastName].filter(Boolean).join(' ').toUpperCase()
     const docText = `${p.documentType || 'DOC'} ${p.documentNumber || 'Sin documento'}`
@@ -212,6 +329,14 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
       } catch {}
     }
 
+    // Photo logic
+    let photoUrl = addData.fotoIngreso || addData.foto || null
+    if (!photoUrl) {
+      const ingresoCp = cps.find((c: any) => c.name === 'Ingreso' && c.evidenceUrl)
+      if (ingresoCp) photoUrl = ingresoCp.evidenceUrl
+    }
+    const participantPhotoData = photoUrl ? imagesMap.get(photoUrl) : null
+
     // Kit check
     const kitScan = cps.find((c: any) => {
       const n = (c?.name || '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
@@ -220,105 +345,168 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
 
     const hasConsent = addData.q_auth_menores || addData.consentimiento || addData.autorizacion
 
-    // Page dimensions: 215.9 x 279.4 mm (Letter)
+    // Dimensiones en mm (Hoja Carta: 215.9 x 279.4)
     const marginX = 14
     const contentW = 187.9
 
-    // 1. TOP HEADER BANNER (y: 12 to 34 mm)
+    // 0. FRANJA SUPERIOR INSTITUCIONAL (Rojo y Gris Oscuro Gobernación)
+    pdf.setFillColor(220, 38, 38)
+    pdf.rect(marginX, 9, 60, 1.5, 'F')
+    pdf.setFillColor(15, 23, 42)
+    pdf.rect(marginX + 60, 9, contentW - 60, 1.5, 'F')
+
+    // 1. BANNER DE ENCABEZADO (y: 12.5 a 35 mm)
     pdf.setFillColor(248, 250, 252)
     pdf.setDrawColor(226, 232, 240)
-    pdf.setLineWidth(0.3)
-    pdf.roundedRect(marginX, 12, contentW, 22, 2, 2, 'FD')
+    pdf.setLineWidth(0.35)
+    pdf.roundedRect(marginX, 12.5, contentW, 22.5, 2, 2, 'FD')
 
+    // Textos de Encabezado
     pdf.setFont('helvetica', 'bold')
-    pdf.setFontSize(11)
-    pdf.setTextColor(15, 23, 42)
-    pdf.text('GOBERNACIÓN DE NORTE DE SANTANDER', marginX + 6, 18)
-
-    pdf.setFont('helvetica', 'normal')
-    pdf.setFontSize(8.5)
+    pdf.setFontSize(8)
     pdf.setTextColor(100, 116, 139)
-    pdf.text('Ficha Individual de Control de Asistencia y Entregas', marginX + 6, 23.5)
+    pdf.text('REPÚBLICA DE COLOMBIA • GOBERNACIÓN DE NORTE DE SANTANDER', marginX + 6, 18)
 
     pdf.setFont('helvetica', 'bold')
-    pdf.setFontSize(9)
-    pdf.setTextColor(37, 99, 235)
-    const eventTitle = (currentEvent.name || 'Evento Institucional').substring(0, 65)
-    pdf.text(eventTitle, marginX + 6, 29.5)
+    pdf.setFontSize(12)
+    pdf.setTextColor(15, 23, 42)
+    pdf.text('CONTROL INDIVIDUAL DE ASISTENCIA Y ENTREGAS', marginX + 6, 24)
 
-    // Draw Logo if loaded
-    if (logoData) {
+    pdf.setFont('helvetica', 'bold')
+    pdf.setFontSize(8.5)
+    pdf.setTextColor(37, 99, 235)
+    const eventTitle = (currentEvent.name || 'Evento Institucional').substring(0, 58)
+    pdf.text(eventTitle, marginX + 6, 30.5)
+
+    // Logo Institucional en la esquina derecha del encabezado (proporcional y nítido)
+    if (logoInfo?.data) {
       try {
-        pdf.addImage(logoData, 'PNG', marginX + contentW - 25, 13.5, 20, 19, undefined, 'FAST')
+        const logoY = 12.5 + (22.5 - logoInfo.height) / 2
+        pdf.addImage(logoInfo.data, 'PNG', marginX + contentW - logoInfo.width - 5, logoY, logoInfo.width, logoInfo.height, undefined, 'FAST')
       } catch {}
     }
 
-    // 2. PARTICIPANT IDENTITY CARD (y: 38 to 74 mm)
+    // 2. TARJETA DE IDENTIFICACIÓN DEL PARTICIPANTE (y: 38 a 78 mm)
     pdf.setFillColor(255, 255, 255)
     pdf.setDrawColor(203, 213, 225)
-    pdf.roundedRect(marginX, 38, contentW, 36, 3, 3, 'FD')
+    pdf.setLineWidth(0.4)
+    pdf.roundedRect(marginX, 38, contentW, 40, 2.5, 2.5, 'FD')
 
-    // Avatar Box
-    pdf.setFillColor(241, 245, 249)
-    pdf.setDrawColor(203, 213, 225)
-    pdf.roundedRect(marginX + 5, 43, 26, 26, 2, 2, 'FD')
-    pdf.setFont('helvetica', 'bold')
-    pdf.setFontSize(15)
-    pdf.setTextColor(148, 163, 184)
-    const initials = `${(p.firstName || 'P')[0] || ''}${(p.lastName || '')[0] || ''}`.toUpperCase() || 'P'
-    pdf.text(initials, marginX + 18, 60, { align: 'center' })
+    // Cuadro de Foto del Participante
+    const photoX = marginX + 4.5
+    const photoY = 41.5
+    const photoW = 32
+    const photoH = 33
 
-    // Participant Name & Doc
-    pdf.setFont('helvetica', 'bold')
-    pdf.setFontSize(13)
-    pdf.setTextColor(15, 23, 42)
-    const safeName = fullName.length > 38 ? fullName.substring(0, 36) + '...' : fullName
-    pdf.text(safeName || 'SIN NOMBRE REGISTRADO', marginX + 36, 49)
+    if (participantPhotoData) {
+      try {
+        pdf.addImage(participantPhotoData, 'JPEG', photoX, photoY, photoW, photoH)
+        pdf.setDrawColor(203, 213, 225)
+        pdf.setLineWidth(0.3)
+        pdf.roundedRect(photoX, photoY, photoW, photoH, 1.5, 1.5, 'D')
+      } catch {
+        // Fallback visual si fallara el render
+        pdf.setFillColor(241, 245, 249)
+        pdf.roundedRect(photoX, photoY, photoW, photoH, 1.5, 1.5, 'FD')
+      }
+    } else {
+      // Placeholder elegante con avatar
+      pdf.setFillColor(241, 245, 249)
+      pdf.setDrawColor(203, 213, 225)
+      pdf.roundedRect(photoX, photoY, photoW, photoH, 1.5, 1.5, 'FD')
 
-    pdf.setFont('helvetica', 'normal')
-    pdf.setFontSize(10)
-    pdf.setTextColor(51, 65, 85)
-    pdf.text(docText, marginX + 36, 55.5)
+      pdf.setFillColor(226, 232, 240)
+      pdf.circle(photoX + photoW / 2, photoY + 13, 7.5, 'F')
+      pdf.setFont('helvetica', 'bold')
+      pdf.setFontSize(11)
+      pdf.setTextColor(100, 116, 139)
+      const initials = `${(p.firstName || 'P')[0] || ''}${(p.lastName || '')[0] || ''}`.toUpperCase() || 'P'
+      pdf.text(initials, photoX + photoW / 2, photoY + 16.5, { align: 'center' })
 
-    // Status Badge
+      pdf.setFontSize(6.5)
+      pdf.setTextColor(148, 163, 184)
+      pdf.text('SIN FOTO', photoX + photoW / 2, photoY + 27, { align: 'center' })
+    }
+
+    // Datos del Participante al lado de la foto
+    const textLeft = marginX + 41
     const isAsistio = reg.status === 'ASISTIO'
+
+    // Nombre Completo (autoajustable para que nunca se desborde)
+    const displayName = fullName || 'SIN NOMBRE REGISTRADO'
+    if (displayName.length > 35) {
+      pdf.setFont('helvetica', 'bold')
+      pdf.setFontSize(11)
+      pdf.setTextColor(15, 23, 42)
+      pdf.text(displayName.substring(0, 48), textLeft, 47)
+    } else {
+      pdf.setFont('helvetica', 'bold')
+      pdf.setFontSize(13)
+      pdf.setTextColor(15, 23, 42)
+      pdf.text(displayName, textLeft, 47.5)
+    }
+
+    // Documento de Identidad
+    pdf.setFont('helvetica', 'bold')
+    pdf.setFontSize(9.5)
+    pdf.setTextColor(71, 85, 105)
+    pdf.text(docText, textLeft, 54)
+
+    // Insignias / Badges modernas
+    // 1. Badge de Estado de Asistencia
     pdf.setFillColor(isAsistio ? 220 : 239, isAsistio ? 252 : 246, isAsistio ? 231 : 255)
     pdf.setDrawColor(isAsistio ? 134 : 191, isAsistio ? 239 : 219, isAsistio ? 172 : 254)
-    pdf.roundedRect(marginX + 36, 61, 28, 7, 1.5, 1.5, 'FD')
+    pdf.roundedRect(textLeft, 61, 35, 7, 1.8, 1.8, 'FD')
     pdf.setFont('helvetica', 'bold')
     pdf.setFontSize(7.5)
     pdf.setTextColor(isAsistio ? 21 : 29, isAsistio ? 128 : 78, isAsistio ? 61 : 216)
-    pdf.text(isAsistio ? '✓ ASISTIÓ' : '⏳ REGISTRADO', marginX + 50, 65.8, { align: 'center' })
+    pdf.text(isAsistio ? '✓ ASISTENCIA' : '⏳ REGISTRADO', textLeft + 17.5, 65.8, { align: 'center' })
 
-    // Kit Badge
+    // 2. Badge de Kit
     pdf.setFillColor(kitScan ? 236 : 255, kitScan ? 253 : 251, kitScan ? 245 : 235)
     pdf.setDrawColor(kitScan ? 167 : 253, kitScan ? 243 : 230, kitScan ? 208 : 138)
-    pdf.roundedRect(marginX + 68, 61, 34, 7, 1.5, 1.5, 'FD')
+    pdf.roundedRect(textLeft + 38, 61, 37, 7, 1.8, 1.8, 'FD')
     pdf.setTextColor(kitScan ? 4 : 180, kitScan ? 120 : 83, kitScan ? 87 : 9)
-    pdf.text(kitScan ? '🎒 KIT ENTREGADO' : '🎒 KIT PENDIENTE', marginX + 85, 65.8, { align: 'center' })
+    pdf.text(kitScan ? '🎒 KIT ENTREGADO' : '🎒 KIT PENDIENTE', textLeft + 38 + 18.5, 65.8, { align: 'center' })
 
-    // ID on right
+    // Caja de ID de Registro a la derecha
+    const idBoxX = marginX + contentW - 36
+    const idBoxY = 41.5
+    const idBoxW = 32
+    const idBoxH = 15
+    pdf.setFillColor(248, 250, 252)
+    pdf.setDrawColor(226, 232, 240)
+    pdf.roundedRect(idBoxX, idBoxY, idBoxW, idBoxH, 2, 2, 'FD')
     pdf.setFont('helvetica', 'bold')
-    pdf.setFontSize(7)
+    pdf.setFontSize(6.5)
     pdf.setTextColor(100, 116, 139)
-    pdf.text('ID REGISTRO', marginX + contentW - 5, 48, { align: 'right' })
+    pdf.text('ID REGISTRO', idBoxX + idBoxW / 2, idBoxY + 5, { align: 'center' })
     pdf.setFont('courier', 'bold')
-    pdf.setFontSize(10)
-    pdf.setTextColor(30, 41, 59)
-    pdf.text(regId, marginX + contentW - 5, 54, { align: 'right' })
+    pdf.setFontSize(10.5)
+    pdf.setTextColor(15, 23, 42)
+    pdf.text(regId, idBoxX + idBoxW / 2, idBoxY + 11.5, { align: 'center' })
 
-    // 3. INFORMATION GRID (y: 78 to 120 mm)
+    // 3. CUADRÍCULA DE DATOS PERSONALES (y: 81 a 122 mm)
     pdf.setFont('helvetica', 'bold')
-    pdf.setFontSize(9)
-    pdf.setTextColor(30, 41, 59)
-    pdf.text('DATOS PERSONALES Y DE CONTACTO', marginX, 80)
+    pdf.setFontSize(8.5)
+    pdf.setTextColor(51, 65, 85)
+    pdf.text('DATOS PERSONALES Y DE CONTACTO', marginX, 83)
+    pdf.setDrawColor(226, 232, 240)
+    pdf.line(marginX, 84.5, marginX + contentW, 84.5)
 
     const colW = (contentW - 6) / 3 // ~60.6 mm
+    const grupoLabel = 
+      addData.grupoJuvenil === 'BASE_JUVENIL' ? 'Base Juvenil' :
+      addData.grupoJuvenil === 'ENLACE_MUNICIPAL' ? 'Enlace Municipal' :
+      addData.grupoJuvenil === 'CMJ' ? 'CMJ' :
+      addData.grupoJuvenil === 'PMJ' ? 'PMJ' :
+      (addData.grupoJuvenil || 'Ninguno')
+
     const infoFields = [
       { label: 'MUNICIPIO', val: p.municipality || 'No registrado' },
       { label: 'TELÉFONO / EMERGENCIA', val: addData.contactoEmergencia || 'No registrado' },
       { label: 'EPS', val: addData.eps || 'No registrada' },
-      { label: 'GRUPO POBLACIONAL', val: addData.grupoJuvenil || 'Ninguno' },
+      { label: 'GRUPO POBLACIONAL', val: grupoLabel },
       { label: 'ALERGIAS / MÉDICA', val: addData.alergiasMedicas || 'Ninguna reportada', alert: Boolean(addData.alergiasMedicas) },
       { label: 'CONSENTIMIENTO', val: hasConsent ? '✓ Adjuntado (Digital)' : 'No adjuntado', success: Boolean(hasConsent) }
     ]
@@ -327,11 +515,11 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
       const col = j % 3
       const row = Math.floor(j / 3)
       const boxX = marginX + col * (colW + 3)
-      const boxY = 84 + row * 18
+      const boxY = 87 + row * 17.5
 
-      pdf.setFillColor(248, 250, 252)
-      pdf.setDrawColor(226, 232, 240)
-      pdf.roundedRect(boxX, boxY, colW, 15, 1.5, 1.5, 'FD')
+      pdf.setFillColor(infoFields[j].alert ? 254 : 248, infoFields[j].alert ? 242 : 250, infoFields[j].alert ? 242 : 252)
+      pdf.setDrawColor(infoFields[j].alert ? 252 : 226, infoFields[j].alert ? 165 : 232, infoFields[j].alert ? 165 : 240)
+      pdf.roundedRect(boxX, boxY, colW, 14.5, 1.5, 1.5, 'FD')
 
       pdf.setFont('helvetica', 'bold')
       pdf.setFontSize(6.5)
@@ -351,75 +539,127 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
       pdf.text(safeVal, boxX + 3.5, boxY + 10.5)
     }
 
-    // 4. CHECKPOINTS / REFRIGERIOS (y: 126 mm+)
+    // 4. LISTADO DE PUNTOS DE CONTROL Y ENTREGAS CON FOTOS (y: 126 mm+)
     pdf.setFont('helvetica', 'bold')
-    pdf.setFontSize(9)
-    pdf.setTextColor(30, 41, 59)
-    pdf.text(`REGISTRO DE ENTREGAS Y PUNTOS DE CONTROL (${cps.length})`, marginX, 127)
+    pdf.setFontSize(8.5)
+    pdf.setTextColor(51, 65, 85)
+    pdf.text(`REGISTRO DE ENTREGAS Y PUNTOS DE CONTROL (${cps.length})`, marginX, 127.5)
+    pdf.setDrawColor(226, 232, 240)
+    pdf.line(marginX, 129, marginX + contentW, 129)
 
-    let currentY = 131
+    let currentY = 132.5
     if (cps.length === 0) {
       pdf.setFillColor(248, 250, 252)
       pdf.setDrawColor(226, 232, 240)
-      pdf.roundedRect(marginX, currentY, contentW, 14, 2, 2, 'FD')
+      pdf.roundedRect(marginX, currentY, contentW, 16, 2, 2, 'FD')
       pdf.setFont('helvetica', 'italic')
       pdf.setFontSize(8.5)
       pdf.setTextColor(148, 163, 184)
-      pdf.text('No hay puntos de control o refrigerios registrados aún para este participante.', marginX + contentW / 2, currentY + 8.5, { align: 'center' })
+      pdf.text('No hay puntos de control o refrigerios registrados aún para este participante.', marginX + contentW / 2, currentY + 10, { align: 'center' })
     } else {
-      const maxCps = Math.min(cps.length, 9)
+      const maxCps = Math.min(cps.length, 5) // Hasta 5 puntos caben perfectamente con foto en página 1
       for (let k = 0; k < maxCps; k++) {
         const cp = cps[k]
+        const cardH = 21
+
         pdf.setFillColor(255, 255, 255)
         pdf.setDrawColor(203, 213, 225)
-        pdf.roundedRect(marginX, currentY, contentW, 12, 1.5, 1.5, 'FD')
+        pdf.roundedRect(marginX, currentY, contentW, cardH, 2, 2, 'FD')
 
-        // Green check circle
+        // Círculo Verde con Check
         pdf.setFillColor(220, 252, 231)
-        pdf.circle(marginX + 5, currentY + 6, 3, 'F')
+        pdf.circle(marginX + 6, currentY + 7, 3.2, 'F')
         pdf.setFont('helvetica', 'bold')
-        pdf.setFontSize(7)
+        pdf.setFontSize(7.5)
         pdf.setTextColor(22, 163, 74)
-        pdf.text('✓', marginX + 5, currentY + 7.2, { align: 'center' })
+        pdf.text('✓', marginX + 6, currentY + 8.2, { align: 'center' })
 
-        // Checkpoint name
+        // Nombre del Punto de Control
         pdf.setFont('helvetica', 'bold')
-        pdf.setFontSize(9)
+        pdf.setFontSize(9.5)
         pdf.setTextColor(15, 23, 42)
-        pdf.text(String(cp.name || 'Punto de Control'), marginX + 11, currentY + 5)
+        const safeCpName = String(cp.name || 'Punto de Control').substring(0, 52)
+        pdf.text(safeCpName, marginX + 12, currentY + 6.5)
 
-        // Time & attendant
+        // Fecha y Hora
         pdf.setFont('helvetica', 'normal')
         pdf.setFontSize(7.5)
         pdf.setTextColor(100, 116, 139)
-        let timeText = `Fecha/Hora: ${formatColombiaDateTime(cp.timestamp)}`
-        if (cp.attendedBy) {
-          timeText += `   •   Entregado por: ${cp.attendedBy}`
-        }
-        pdf.text(timeText, marginX + 11, currentY + 9.5)
+        pdf.text(`Fecha/Hora: ${formatColombiaDateTime(cp.timestamp)}`, marginX + 12, currentY + 12)
 
-        currentY += 13.5
+        // Funcionario que entregó
+        if (cp.attendedBy) {
+          pdf.setFont('helvetica', 'bold')
+          pdf.setFontSize(7.5)
+          pdf.setTextColor(37, 99, 235)
+          pdf.text(`• Registrado por: ${String(cp.attendedBy).substring(0, 42)}`, marginX + 12, currentY + 16.5)
+        }
+
+        // FOTO DE EVIDENCIA EN LA DERECHA
+        const imgX = marginX + contentW - 25
+        const imgY = currentY + 2.5
+        const imgW = 21
+        const imgH = 16
+        const evidenceData = cp.evidenceUrl ? imagesMap.get(cp.evidenceUrl) : null
+
+        if (evidenceData) {
+          try {
+            pdf.addImage(evidenceData, 'JPEG', imgX, imgY, imgW, imgH)
+            pdf.setDrawColor(203, 213, 225)
+            pdf.setLineWidth(0.3)
+            pdf.rect(imgX, imgY, imgW, imgH)
+          } catch {
+            pdf.setFillColor(248, 250, 252)
+            pdf.setDrawColor(226, 232, 240)
+            pdf.roundedRect(imgX, imgY, imgW, imgH, 1, 1, 'FD')
+          }
+        } else {
+          pdf.setFillColor(248, 250, 252)
+          pdf.setDrawColor(226, 232, 240)
+          pdf.roundedRect(imgX, imgY, imgW, imgH, 1, 1, 'FD')
+          pdf.setFont('helvetica', 'normal')
+          pdf.setFontSize(6)
+          pdf.setTextColor(148, 163, 184)
+          pdf.text('Sin evidencia', imgX + imgW / 2, imgY + 9, { align: 'center' })
+        }
+
+        currentY += 23.5
       }
 
-      if (cps.length > 9) {
+      if (cps.length > 5) {
         pdf.setFont('helvetica', 'italic')
         pdf.setFontSize(8)
         pdf.setTextColor(100, 116, 139)
-        pdf.text(`... y ${cps.length - 9} entregas adicionales registradas en el sistema`, marginX + 5, currentY + 4)
+        pdf.text(`... y ${cps.length - 5} entregas adicionales registradas en el sistema`, marginX + 5, currentY + 3)
       }
     }
 
-    // 5. FOOTER
+    // 5. LÍNEAS DE FIRMA Y CONFORMIDAD INSTITUCIONAL (y: 253 a 263 mm)
+    pdf.setDrawColor(203, 213, 225)
+    pdf.setLineWidth(0.35)
+    pdf.line(marginX + 15, 254, marginX + 75, 254)
+    pdf.setFont('helvetica', 'bold')
+    pdf.setFontSize(6.5)
+    pdf.setTextColor(100, 116, 139)
+    pdf.text('FIRMA / ACEPTACIÓN DEL PARTICIPANTE', marginX + 45, 258, { align: 'center' })
+
+    pdf.line(marginX + contentW - 75, 254, marginX + contentW - 15, 254)
+    pdf.text('RESPONSABLE DE ENTREGA Y REGISTRO', marginX + contentW - 45, 258, { align: 'center' })
+
+    // 6. PIE DE PÁGINA OFICIAL
     pdf.setDrawColor(226, 232, 240)
     pdf.line(marginX, 266, marginX + contentW, 266)
     pdf.setFont('helvetica', 'normal')
-    pdf.setFontSize(7.5)
+    pdf.setFontSize(7)
     pdf.setTextColor(148, 163, 184)
-    pdf.text('Sistema de Asistencia y Entregas • Gobernación de Norte de Santander', marginX, 271)
+    pdf.text('Sistema Institucional de Control de Asistencia y Entregas • Gobernación de Norte de Santander', marginX, 271)
+    pdf.setFont('helvetica', 'bold')
+    pdf.setFontSize(7.5)
+    pdf.setTextColor(100, 116, 139)
     pdf.text(`Página ${pageNum} de ${totalPages}`, marginX + contentW, 271, { align: 'right' })
   }
 
-  // Descargar todas las fichas filtradas en un archivo PDF real (Ultra rápido: ~1 segundo para 600 fichas)
+  // Descargar todas las fichas filtradas en un archivo PDF real, con todas sus fotos y diseño ejecutivo
   const handleDownloadPdf = async () => {
     if (filteredRegistrations.length === 0) {
       alert('No hay fichas para descargar con los filtros actuales.')
@@ -428,11 +668,64 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
 
     try {
       setIsGeneratingPdf(true)
-      setPdfProgressText('Generando PDF instantáneo...')
+      setPdfProgressText('Iniciando optimizador de PDF...')
 
       const jsPDF = await ensureJsPdf()
-      const logoData = await loadLogoBase64()
+      const logoInfo = await loadLogoInfo()
 
+      // 1. Recolectar todas las URLs únicas de fotos del participante y evidencias
+      const uniqueUrls = new Set<string>()
+      for (const reg of filteredRegistrations) {
+        const p = reg.person || {}
+        let addData: Record<string, any> = {}
+        if (p.additionalData) {
+          try {
+            const parsed = JSON.parse(p.additionalData)
+            if (parsed && typeof parsed === 'object') addData = parsed
+          } catch {}
+        }
+
+        const cps: any[] = []
+        if (reg.checkpoints) {
+          try {
+            const parsed = JSON.parse(reg.checkpoints)
+            if (Array.isArray(parsed)) cps.push(...parsed)
+          } catch {}
+        }
+
+        let photoUrl = addData.fotoIngreso || addData.foto || null
+        if (!photoUrl) {
+          const ingresoCp = cps.find((c: any) => c.name === 'Ingreso' && c.evidenceUrl)
+          if (ingresoCp) photoUrl = ingresoCp.evidenceUrl
+        }
+        if (photoUrl) uniqueUrls.add(photoUrl)
+
+        for (const cp of cps) {
+          if (cp.evidenceUrl) uniqueUrls.add(cp.evidenceUrl)
+        }
+      }
+
+      // 2. Precargar imágenes concurrentemente con barra de progreso
+      const imagesMap = new Map<string, string | null>()
+      const urlList = Array.from(uniqueUrls)
+      const totalUrls = urlList.length
+
+      if (totalUrls > 0) {
+        let loadedCount = 0
+        setPdfProgressText(`Cargando fotos y evidencias (0/${totalUrls})...`)
+
+        await runConcurrentPool(urlList, async (url) => {
+          const dataUrl = await fetchImageAsDataUrl(url)
+          imagesMap.set(url, dataUrl)
+          loadedCount++
+          if (loadedCount % 5 === 0 || loadedCount === totalUrls) {
+            setPdfProgressText(`Cargando fotos y evidencias (${loadedCount}/${totalUrls})...`)
+          }
+        }, 12)
+      }
+
+      // 3. Generar todas las páginas vectoriales en memoria
+      setPdfProgressText('Generando páginas de alta calidad...')
       const total = filteredRegistrations.length
       const pdf = new jsPDF({
         orientation: 'portrait',
@@ -441,10 +734,9 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
         compress: true
       })
 
-      // Generar todas las páginas en memoria directamente
       for (let i = 0; i < total; i++) {
         if (i > 0) pdf.addPage()
-        drawFichaVector(pdf, filteredRegistrations[i], event, i + 1, total, logoData)
+        drawFichaVector(pdf, filteredRegistrations[i], event, i + 1, total, logoInfo, imagesMap)
       }
 
       setPdfProgressText('Descargando archivo...')
@@ -459,17 +751,51 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
     }
   }
 
-  // Descargar una ficha individual en PDF de forma instantánea
+  // Descargar una ficha individual en PDF de forma instantánea con todas sus fotos
   const handleDownloadSinglePdf = async (regId: string, participantName: string) => {
     try {
       setIsGeneratingPdf(true)
-      setPdfProgressText('Generando ficha...')
+      setPdfProgressText('Cargando ficha...')
 
       const reg = registrations.find(r => r.id === regId)
       if (!reg) throw new Error('No se encontró el registro')
 
       const jsPDF = await ensureJsPdf()
-      const logoData = await loadLogoBase64()
+      const logoInfo = await loadLogoInfo()
+
+      // Recolectar fotos de esta ficha
+      const p = reg.person || {}
+      let addData: Record<string, any> = {}
+      if (p.additionalData) {
+        try {
+          const parsed = JSON.parse(p.additionalData)
+          if (parsed && typeof parsed === 'object') addData = parsed
+        } catch {}
+      }
+
+      const cps: any[] = []
+      if (reg.checkpoints) {
+        try {
+          const parsed = JSON.parse(reg.checkpoints)
+          if (Array.isArray(parsed)) cps.push(...parsed)
+        } catch {}
+      }
+
+      let photoUrl = addData.fotoIngreso || addData.foto || null
+      if (!photoUrl) {
+        const ingresoCp = cps.find((c: any) => c.name === 'Ingreso' && c.evidenceUrl)
+        if (ingresoCp) photoUrl = ingresoCp.evidenceUrl
+      }
+
+      const imagesMap = new Map<string, string | null>()
+      if (photoUrl) {
+        imagesMap.set(photoUrl, await fetchImageAsDataUrl(photoUrl))
+      }
+      for (const cp of cps) {
+        if (cp.evidenceUrl && !imagesMap.has(cp.evidenceUrl)) {
+          imagesMap.set(cp.evidenceUrl, await fetchImageAsDataUrl(cp.evidenceUrl))
+        }
+      }
 
       const pdf = new jsPDF({
         orientation: 'portrait',
@@ -478,7 +804,7 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
         compress: true
       })
 
-      drawFichaVector(pdf, reg, event, 1, 1, logoData)
+      drawFichaVector(pdf, reg, event, 1, 1, logoInfo, imagesMap)
 
       const safeName = (participantName || 'Participante').replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 30)
       pdf.save(`Ficha_${safeName}.pdf`)
