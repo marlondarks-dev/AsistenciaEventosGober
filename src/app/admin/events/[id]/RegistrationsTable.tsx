@@ -47,6 +47,18 @@ export interface AttachedDoc {
   type: string
 }
 
+export const getMealIconHelper = (mealName: string): string => {
+  if (!mealName) return '📍'
+  const lower = mealName.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+  if (lower.includes('desayuno')) return '☕'
+  if (lower.includes('almuerzo')) return '🍽️'
+  if (lower.includes('cena')) return '🍲'
+  if (lower.includes('refrigerio')) return '🍪'
+  if (lower.includes('kit') || lower.includes('bienvenida')) return '🎒'
+  if (lower.includes('ingreso') || lower.includes('puerta')) return '🚪'
+  return '📍'
+}
+
 export default function RegistrationsTable({ 
   eventId, 
   initialRegistrations,
@@ -61,6 +73,7 @@ export default function RegistrationsTable({
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'ASISTIO' | 'REGISTRADO' | 'CANCELADO'>('ALL')
   const [kitFilter, setKitFilter] = useState<'ALL' | 'WITH_KIT' | 'WITHOUT_KIT'>('ALL')
+  const [checkpointFilter, setCheckpointFilter] = useState<{ name: string; status: 'ALL' | 'DELIVERED' | 'PENDING' }>({ name: 'ALL', status: 'ALL' })
   
   // Modals state
   const [viewingReg, setViewingReg] = useState<any | null>(null)
@@ -306,6 +319,31 @@ export default function RegistrationsTable({
 
   const hasKit = (reg: any): boolean => !!getKitScan(reg)
 
+  // Listen for external filter requests from Metric Cards & refresh signals
+  useEffect(() => {
+    const handleFilterEvent = (e: any) => {
+      if (e.detail && e.detail.name) {
+        setCheckpointFilter({
+          name: e.detail.name,
+          status: e.detail.status || 'ALL'
+        })
+        if (e.detail.status === 'DELIVERED') {
+          setStatusFilter('ASISTIO')
+        }
+      }
+    }
+    const handleRefreshedEvent = () => {
+      fetchLiveRegistrations(false)
+    }
+
+    window.addEventListener('filter-by-checkpoint', handleFilterEvent)
+    window.addEventListener('registrations-refreshed', handleRefreshedEvent)
+    return () => {
+      window.removeEventListener('filter-by-checkpoint', handleFilterEvent)
+      window.removeEventListener('registrations-refreshed', handleRefreshedEvent)
+    }
+  }, [])
+
   // Filter registrations
   const filtered = useMemo(() => {
     return registrations.filter(r => {
@@ -322,6 +360,31 @@ export default function RegistrationsTable({
         return false
       }
 
+      // Checkpoint / Entrega filter
+      if (checkpointFilter.name !== 'ALL') {
+        let cps: any[] = []
+        try {
+          cps = typeof r.checkpoints === 'string' ? JSON.parse(r.checkpoints || '[]') : (r.checkpoints || [])
+          if (!Array.isArray(cps)) cps = []
+        } catch {
+          cps = []
+        }
+
+        const isKitTarget = isKitName(checkpointFilter.name)
+        const hasThisCp = cps.some((c: any) => {
+          if (!c || !c.name) return false
+          if (isKitTarget && isKitName(c.name)) return true
+          return c.name === checkpointFilter.name
+        })
+
+        if (checkpointFilter.status === 'DELIVERED' && !hasThisCp) {
+          return false
+        }
+        if (checkpointFilter.status === 'PENDING' && (hasThisCp || r.status === 'CANCELADO')) {
+          return false
+        }
+      }
+
       // Search query
       if (!search.trim()) return true
       const q = search.toLowerCase().trim()
@@ -333,7 +396,7 @@ export default function RegistrationsTable({
 
       return fullName.includes(q) || doc.includes(q) || mun.includes(q)
     })
-  }, [registrations, search, statusFilter, kitFilter])
+  }, [registrations, search, statusFilter, kitFilter, checkpointFilter])
 
   // Count stats
   const totalCount = registrations.length
@@ -860,7 +923,7 @@ export default function RegistrationsTable({
   }
 
   return (
-    <div>
+    <div id="participants-table-container">
       {/* Toast Notification */}
       {toast && (
         <div style={{
@@ -1159,6 +1222,118 @@ export default function RegistrationsTable({
           </div>
         </div>
 
+        {/* FILTRO POR CUALQUIER ENTREGA O REFRIGERIO */}
+        <div style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: '0.6rem',
+          alignItems: 'center',
+          width: '100%',
+          paddingTop: '0.75rem',
+          borderTop: '1px dashed #CBD5E1'
+        }}>
+          <span style={{ fontSize: '0.8rem', fontWeight: 800, color: '#1E293B', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+            <Utensils size={14} color="#D97706" /> Filtrar por Entrega / Refrigerio:
+          </span>
+
+          <select
+            value={checkpointFilter.name}
+            onChange={e => setCheckpointFilter(prev => ({ ...prev, name: e.target.value }))}
+            style={{
+              padding: '0.35rem 0.65rem',
+              borderRadius: '8px',
+              border: checkpointFilter.name !== 'ALL' ? '2px solid #2563EB' : '1.5px solid #CBD5E1',
+              backgroundColor: checkpointFilter.name !== 'ALL' ? '#EFF6FF' : '#FFFFFF',
+              fontSize: '0.8rem',
+              fontWeight: 700,
+              color: checkpointFilter.name !== 'ALL' ? '#1D4ED8' : '#1E293B',
+              outline: 'none',
+              cursor: 'pointer'
+            }}
+          >
+            <option value="ALL">-- Todas las entregas registradas --</option>
+            {eventCheckpoints.map(cp => (
+              <option key={cp} value={cp}>
+                {getMealIconHelper(cp)} {cp}
+              </option>
+            ))}
+          </select>
+
+          {checkpointFilter.name !== 'ALL' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={() => setCheckpointFilter(prev => ({ ...prev, status: 'ALL' }))}
+                style={{
+                  padding: '0.25rem 0.6rem',
+                  borderRadius: '16px',
+                  fontSize: '0.75rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  border: checkpointFilter.status === 'ALL' ? '2px solid #2563EB' : '1px solid #CBD5E1',
+                  backgroundColor: checkpointFilter.status === 'ALL' ? '#EFF6FF' : '#FFFFFF',
+                  color: checkpointFilter.status === 'ALL' ? '#1D4ED8' : '#475569'
+                }}
+              >
+                Todos con este punto
+              </button>
+              <button
+                type="button"
+                onClick={() => setCheckpointFilter(prev => ({ ...prev, status: 'DELIVERED' }))}
+                style={{
+                  padding: '0.25rem 0.6rem',
+                  borderRadius: '16px',
+                  fontSize: '0.75rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  border: checkpointFilter.status === 'DELIVERED' ? '2px solid #16A34A' : '1px solid #CBD5E1',
+                  backgroundColor: checkpointFilter.status === 'DELIVERED' ? '#DCFCE7' : '#FFFFFF',
+                  color: checkpointFilter.status === 'DELIVERED' ? '#15803D' : '#475569'
+                }}
+              >
+                ✅ Ya Entregado
+              </button>
+              <button
+                type="button"
+                onClick={() => setCheckpointFilter(prev => ({ ...prev, status: 'PENDING' }))}
+                style={{
+                  padding: '0.25rem 0.6rem',
+                  borderRadius: '16px',
+                  fontSize: '0.75rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  border: checkpointFilter.status === 'PENDING' ? '2px solid #D97706' : '1px solid #CBD5E1',
+                  backgroundColor: checkpointFilter.status === 'PENDING' ? '#FEF3C7' : '#FFFFFF',
+                  color: checkpointFilter.status === 'PENDING' ? '#B45309' : '#475569'
+                }}
+              >
+                ⏳ Falta por Entregar
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setCheckpointFilter({ name: 'ALL', status: 'ALL' })}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#EF4444',
+                  fontSize: '0.75rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.2rem',
+                  marginLeft: '0.25rem'
+                }}
+                title="Limpiar filtro de refrigerio"
+              >
+                <X size={13} />
+                <span>Quitar filtro</span>
+              </button>
+            </div>
+          )}
+        </div>
+
         {/* Quick Actions & Export Bar */}
         <div style={{
           display: 'flex',
@@ -1244,6 +1419,7 @@ export default function RegistrationsTable({
                 <th style={{ padding: '0.75rem 1rem', fontSize: '0.8rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase' }}>Municipio & Contacto</th>
                 <th style={{ padding: '0.75rem 1rem', fontSize: '0.8rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase' }}>Estado</th>
                 <th style={{ padding: '0.75rem 1rem', fontSize: '0.8rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase' }}>🎒 Kit Bienvenida</th>
+                <th style={{ padding: '0.75rem 1rem', fontSize: '0.8rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase' }}>🍱 Refrigerios & Entregas</th>
                 <th style={{ padding: '0.75rem 1rem', fontSize: '0.8rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase' }}>Inscripción</th>
                 <th style={{ padding: '0.75rem 1rem', fontSize: '0.8rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase', textAlign: 'center' }}>Acciones</th>
               </tr>
@@ -1519,6 +1695,96 @@ export default function RegistrationsTable({
                             </div>
                           )
                         }
+                      })()}
+                    </td>
+
+                    {/* Entregas y Refrigerios en Vivo */}
+                    <td style={{ padding: '0.75rem 1rem', minWidth: '240px', maxWidth: '340px' }}>
+                      {(() => {
+                        let cps: any[] = []
+                        try {
+                          cps = typeof reg.checkpoints === 'string' ? JSON.parse(reg.checkpoints || '[]') : (reg.checkpoints || [])
+                          if (!Array.isArray(cps)) cps = []
+                        } catch {
+                          cps = []
+                        }
+
+                        // List all delivered checkpoints (except kit which has its own column)
+                        const nonKitDeliveries = cps.filter((c: any) => c && c.name && !isKitName(c.name))
+                        const totalConfiguredMeals = eventCheckpoints.filter((cp: string) => !isKitName(cp)).length
+
+                        return (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                            {nonKitDeliveries.length === 0 ? (
+                              <span style={{ fontSize: '0.74rem', color: '#94A3B8', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
+                                <Clock size={12} /> Sin refrigerios entregados
+                              </span>
+                            ) : (
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
+                                {nonKitDeliveries.map((cp: any, idx: number) => {
+                                  const icon = getMealIconHelper(cp.name)
+                                  const timeStr = cp.timestamp ? new Date(cp.timestamp).toLocaleTimeString('es-CO', {
+                                    timeZone: 'America/Bogota',
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                    hour12: true
+                                  }) : ''
+
+                                  return (
+                                    <span
+                                      key={idx}
+                                      title={`${cp.name} - Entregado a las ${timeStr}${cp.attendedBy ? ` por ${cp.attendedBy}` : ''}`}
+                                      style={{
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '0.2rem',
+                                        fontSize: '0.7rem',
+                                        fontWeight: 700,
+                                        padding: '0.15rem 0.45rem',
+                                        borderRadius: '6px',
+                                        backgroundColor: '#F0FDF4',
+                                        color: '#166534',
+                                        border: '1px solid #BBF7D0',
+                                        lineHeight: 1.2
+                                      }}
+                                    >
+                                      <span>{icon}</span>
+                                      <span>{cp.name}</span>
+                                      {timeStr && <span style={{ color: '#15803D', fontSize: '0.65rem', opacity: 0.85 }}>({timeStr})</span>}
+                                    </span>
+                                  )
+                                })}
+                              </div>
+                            )}
+
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', marginTop: '0.15rem' }}>
+                              <span style={{ fontSize: '0.7rem', color: '#64748B', fontWeight: 600 }}>
+                                {nonKitDeliveries.length} de {totalConfiguredMeals} entregados
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => setManagingCheckpointsReg(reg)}
+                                style={{
+                                  background: '#EFF6FF',
+                                  border: '1px solid #BFDBFE',
+                                  borderRadius: '5px',
+                                  color: '#1D4ED8',
+                                  fontSize: '0.68rem',
+                                  fontWeight: 700,
+                                  cursor: 'pointer',
+                                  padding: '0.15rem 0.45rem',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '0.2rem'
+                                }}
+                                title="Marcar o editar entregas de comida"
+                              >
+                                <Utensils size={10} />
+                                <span>Gestionar</span>
+                              </button>
+                            </div>
+                          </div>
+                        )
                       })()}
                     </td>
 

@@ -58,19 +58,39 @@ export default async function EventDetailPage({ params }: { params: Promise<{ id
 
   // Calculate checkpoints stats
   const checkpointStats: Record<string, number> = {}
+  checkpoints.forEach(cpName => {
+    checkpointStats[cpName] = 0
+  })
+
+  const isKit = (n: string) => {
+    if (!n) return false
+    const norm = n.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    return norm.includes('kit') || norm.includes('bienvenida')
+  }
+
+  let attendedWithoutIngreso = 0
   event.registrations.forEach(r => {
+    let cps: any[] = []
     if (r.checkpoints) {
       try {
-        const cps = typeof r.checkpoints === 'string' ? JSON.parse(r.checkpoints) : r.checkpoints
-        if (Array.isArray(cps)) {
-          cps.forEach((cp: any) => {
-            if (cp && cp.name) {
-              checkpointStats[cp.name] = (checkpointStats[cp.name] || 0) + 1
-            }
-          })
-        }
-      } catch(e) {}
+        cps = typeof r.checkpoints === 'string' ? JSON.parse(r.checkpoints) : r.checkpoints
+        if (!Array.isArray(cps)) cps = []
+      } catch(e) {
+        cps = []
+      }
     }
+
+    const hasIngreso = cps.some((c: any) => c && c.name === 'Ingreso')
+    if (r.status === 'ASISTIO' && !hasIngreso) {
+      attendedWithoutIngreso++
+    }
+
+    cps.forEach((cp: any) => {
+      if (cp && cp.name) {
+        const key = isKit(cp.name) ? 'Kit de Bienvenida' : cp.name
+        checkpointStats[key] = (checkpointStats[key] || 0) + 1
+      }
+    })
   })
 
   return (
@@ -111,6 +131,9 @@ export default async function EventDetailPage({ params }: { params: Promise<{ id
         initialAttended={attendedCount}
         initialPending={pendingCount}
         initialCheckpoints={checkpointStats}
+        initialConfiguredCheckpoints={checkpoints}
+        initialAttendedWithoutIngreso={attendedWithoutIngreso}
+        eventRequiredFields={event.requiredFields || undefined}
       />
 
       {/* CHECKPOINTS & DAILY MEALS SCHEDULE MANAGER */}

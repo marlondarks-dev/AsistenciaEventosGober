@@ -38,21 +38,54 @@ export async function GET(
       }
     })
 
-    // Checkpoint deliveries stats
+    // Checkpoint deliveries stats & configured list
+    let configuredCheckpoints: string[] = ['Ingreso', 'Kit de Bienvenida']
+    try {
+      const parsedConfig = event.requiredFields ? JSON.parse(event.requiredFields) : {}
+      if (Array.isArray(parsedConfig.checkpoints) && parsedConfig.checkpoints.length > 0) {
+        configuredCheckpoints = parsedConfig.checkpoints
+      }
+    } catch (e) {}
+
     const checkpointStats: Record<string, number> = {}
+    configuredCheckpoints.forEach(cpName => {
+      checkpointStats[cpName] = 0
+    })
+
+    let attendedWithoutIngreso = 0
+    let attendedWithoutKit = 0
+
     event.registrations.forEach(r => {
+      let cps: any[] = []
       if (r.checkpoints) {
         try {
-          const cps = typeof r.checkpoints === 'string' ? JSON.parse(r.checkpoints) : r.checkpoints
-          if (Array.isArray(cps)) {
-            cps.forEach((cp: any) => {
-              if (cp && cp.name) {
-                checkpointStats[cp.name] = (checkpointStats[cp.name] || 0) + 1
-              }
-            })
-          }
-        } catch (e) {}
+          cps = typeof r.checkpoints === 'string' ? JSON.parse(r.checkpoints) : r.checkpoints
+          if (!Array.isArray(cps)) cps = []
+        } catch (e) {
+          cps = []
+        }
       }
+
+      const isKit = (n: string) => {
+        if (!n) return false
+        const norm = n.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+        return norm.includes('kit') || norm.includes('bienvenida')
+      }
+
+      const hasIngreso = cps.some((c: any) => c && c.name === 'Ingreso')
+      const hasKit = cps.some((c: any) => c && isKit(c.name))
+
+      if (r.status === 'ASISTIO') {
+        if (!hasIngreso) attendedWithoutIngreso++
+        if (!hasKit) attendedWithoutKit++
+      }
+
+      cps.forEach((cp: any) => {
+        if (cp && cp.name) {
+          const key = isKit(cp.name) ? 'Kit de Bienvenida' : cp.name
+          checkpointStats[key] = (checkpointStats[key] || 0) + 1
+        }
+      })
     })
 
     return NextResponse.json({
@@ -63,7 +96,10 @@ export async function GET(
         pendingCount,
         cancelledCount,
         registrationsByMunicipality,
-        checkpointStats
+        checkpointStats,
+        configuredCheckpoints,
+        attendedWithoutIngreso,
+        attendedWithoutKit
       }
     }, {
       headers: {
