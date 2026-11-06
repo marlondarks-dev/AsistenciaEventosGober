@@ -100,6 +100,27 @@ export async function PATCH(
       }
     }
 
+    // CRITICAL: Synchronize fotoIngreso with checkpoints
+    // If fotoIngreso is sent (either a new URL or null/empty to delete),
+    // update the "Ingreso" checkpoint's evidenceUrl so it never keeps the old photo!
+    if (fotoIngreso !== undefined) {
+      const normalizedPhoto = (fotoIngreso && typeof fotoIngreso === 'string' && fotoIngreso.trim()) ? fotoIngreso.trim() : null
+      let cpUpdated = false
+      currentCheckpoints = currentCheckpoints.map((cp: any) => {
+        if (cp && cp.name === 'Ingreso') {
+          cpUpdated = true
+          return {
+            ...cp,
+            evidenceUrl: normalizedPhoto
+          }
+        }
+        return cp
+      })
+      if (cpUpdated) {
+        regUpdateData.checkpoints = JSON.stringify(currentCheckpoints)
+      }
+    }
+
     if (status && status !== reg.status) {
       regUpdateData.status = status
       if (status === 'ASISTIO') {
@@ -108,10 +129,11 @@ export async function PATCH(
         
         // Ensure "Ingreso" checkpoint is present without erasing any newly added refrigerios or checkpoints!
         if (!currentCheckpoints.some((c: any) => c.name === 'Ingreso')) {
+          const photoForIngreso = (fotoIngreso && typeof fotoIngreso === 'string' && fotoIngreso.trim()) ? fotoIngreso.trim() : null
           currentCheckpoints.unshift({
             name: 'Ingreso',
             timestamp: new Date().toISOString(),
-            evidenceUrl: fotoIngreso || null
+            evidenceUrl: photoForIngreso
           })
           regUpdateData.checkpoints = JSON.stringify(currentCheckpoints)
         }
@@ -133,8 +155,18 @@ export async function PATCH(
       currentAdditionalData = JSON.parse(reg.person.additionalData || '{}')
     } catch (e) {}
 
+    // Clean customAnswers so old photo values cannot overwrite the new photo or removal
+    const cleanCustomAnswers = { ...(customAnswers || {}) }
+    delete cleanCustomAnswers.fotoIngreso
+    delete cleanCustomAnswers.foto
+
+    const finalPhotoVal = (fotoIngreso && typeof fotoIngreso === 'string' && fotoIngreso.trim()) 
+      ? fotoIngreso.trim() 
+      : (fotoIngreso === null ? null : undefined)
+
     const updatedAdditionalData = {
       ...currentAdditionalData,
+      ...cleanCustomAnswers,
       ...(eps !== undefined && { eps: typeof eps === 'string' ? eps.trim().toUpperCase() : eps }),
       ...(contactoEmergencia !== undefined && { contactoEmergencia: typeof contactoEmergencia === 'string' ? contactoEmergencia.trim().toUpperCase() : contactoEmergencia }),
       ...(alergiasMedicas !== undefined && { alergiasMedicas: typeof alergiasMedicas === 'string' ? alergiasMedicas.trim().toUpperCase() : alergiasMedicas }),
@@ -142,8 +174,7 @@ export async function PATCH(
       ...(discapacidad !== undefined && { discapacidad }),
       ...(grupoEtnico !== undefined && { grupoEtnico }),
       ...(victima !== undefined && { victima }),
-      ...(fotoIngreso !== undefined && { fotoIngreso, foto: fotoIngreso }),
-      ...(customAnswers || {})
+      ...(finalPhotoVal !== undefined && { fotoIngreso: finalPhotoVal, foto: finalPhotoVal })
     }
 
     // 3. Update Person record

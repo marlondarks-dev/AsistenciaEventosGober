@@ -746,6 +746,10 @@ export default function RegistrationsTable({
 
     const docs = getParticipantDocs(reg)
 
+    const cleanAddData = { ...addData }
+    delete cleanAddData.fotoIngreso
+    delete cleanAddData.foto
+
     setEditingReg({
       id: reg.id,
       status: reg.status,
@@ -769,7 +773,7 @@ export default function RegistrationsTable({
       victima: addData.victima || '',
       fotoIngreso: photoUrl,
       docs,
-      customAnswers: addData
+      customAnswers: cleanAddData
     })
   }
 
@@ -832,10 +836,15 @@ export default function RegistrationsTable({
 
     setSaving(true)
     try {
+      const payload = {
+        ...editingReg,
+        fotoIngreso: editingReg.fotoIngreso !== undefined ? editingReg.fotoIngreso : null
+      }
+
       const res = await fetch(`/api/registrations/${editingReg.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(editingReg)
+        body: JSON.stringify(payload)
       })
 
       const data = await res.json()
@@ -843,8 +852,15 @@ export default function RegistrationsTable({
         throw new Error(data.error || 'Error al guardar los cambios')
       }
 
+      const updatedReg = data.registration
       // Update local state
-      setRegistrations(prev => prev.map(r => r.id === editingReg.id ? data.registration : r))
+      setRegistrations(prev => prev.map(r => r.id === editingReg.id ? updatedReg : r))
+      if (viewingReg && viewingReg.id === editingReg.id) {
+        setViewingReg(updatedReg)
+      }
+      if (managingCheckpointsReg && managingCheckpointsReg.id === editingReg.id) {
+        setManagingCheckpointsReg(updatedReg)
+      }
       setEditingReg(null)
       showToast('success', 'Registro y datos del participante actualizados con éxito.')
       fetchLiveRegistrations(false)
@@ -2121,7 +2137,15 @@ export default function RegistrationsTable({
                         const res = await fetch('/api/upload', { method: 'POST', body: fd })
                         const json = await res.json()
                         if (json.url) {
-                          setEditingReg({ ...editingReg, fotoIngreso: json.url })
+                          setEditingReg((prev: any) => ({
+                            ...prev,
+                            fotoIngreso: json.url,
+                            customAnswers: {
+                              ...(prev?.customAnswers || {}),
+                              fotoIngreso: json.url,
+                              foto: json.url
+                            }
+                          }))
                         }
                       } catch (err) {
                         alert('Error al subir la imagen')
@@ -2145,7 +2169,18 @@ export default function RegistrationsTable({
                     {editingReg.fotoIngreso && (
                       <button
                         type="button"
-                        onClick={() => setEditingReg({ ...editingReg, fotoIngreso: null })}
+                        onClick={() => {
+                          setEditingReg((prev: any) => {
+                            const nextAnswers = { ...(prev?.customAnswers || {}) }
+                            delete nextAnswers.fotoIngreso
+                            delete nextAnswers.foto
+                            return {
+                              ...prev,
+                              fotoIngreso: null,
+                              customAnswers: nextAnswers
+                            }
+                          })
+                        }}
                         className="btn btn-outline"
                         style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem', color: '#DC2626', borderColor: '#FECACA' }}
                       >
