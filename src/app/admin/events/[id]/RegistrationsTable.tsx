@@ -59,6 +59,12 @@ export const getMealIconHelper = (mealName: string): string => {
   return '📍'
 }
 
+export const isKitName = (name: string): boolean => {
+  if (!name) return false
+  const lower = name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+  return lower.includes('kit') || lower.includes('bienvenida')
+}
+
 export default function RegistrationsTable({ 
   eventId, 
   initialRegistrations,
@@ -83,6 +89,7 @@ export default function RegistrationsTable({
   const [deleting, setDeleting] = useState(false)
   const [exportingExcel, setExportingExcel] = useState(false)
   const [toast, setToast] = useState<{ type: 'success' | 'error', text: string } | null>(null)
+  const [isClearingAllKits, setIsClearingAllKits] = useState(false)
   
   // Modals for Checkpoints / Refrigerios
   const [managingCheckpointsReg, setManagingCheckpointsReg] = useState<any | null>(null)
@@ -97,12 +104,22 @@ export default function RegistrationsTable({
   const [customCheckpointInput, setCustomCheckpointInput] = useState('')
 
   // Parse checkpoints & daily schedule from event
-  const { eventCheckpoints, eventDailySchedule, eventDaysList } = useMemo(() => {
+  const { eventCheckpoints, eventDailySchedule, eventDaysList, eventHasKit } = useMemo(() => {
     try {
       const parsed = eventRequiredFields ? JSON.parse(eventRequiredFields) : {}
-      const cps: string[] = Array.isArray(parsed.checkpoints) && parsed.checkpoints.length > 0 
+      let cps: string[] = Array.isArray(parsed.checkpoints) && parsed.checkpoints.length > 0 
         ? parsed.checkpoints 
-        : ['Ingreso', 'Kit de Bienvenida']
+        : ['Ingreso']
+      
+      const hasKitBool = parsed.hasKit === true 
+        ? true 
+        : (parsed.hasKit === false 
+          ? false 
+          : cps.some(c => isKitName(c)))
+      
+      if (parsed.hasKit === false) {
+        cps = cps.filter(c => !isKitName(c))
+      }
       
       const dailySched = parsed.dailySchedule || null
       
@@ -114,7 +131,8 @@ export default function RegistrationsTable({
           eventDaysList: dailySched.days.map((d: any) => ({
             day: d.day,
             meals: Array.isArray(d.meals) ? d.meals : []
-          }))
+          })),
+          eventHasKit: hasKitBool
         }
       }
 
@@ -138,13 +156,15 @@ export default function RegistrationsTable({
       return {
         eventCheckpoints: cps,
         eventDailySchedule: { generalPoints: general, days: daysList },
-        eventDaysList: daysList
+        eventDaysList: daysList,
+        eventHasKit: hasKitBool
       }
     } catch {
       return {
-        eventCheckpoints: ['Ingreso', 'Kit de Bienvenida'],
+        eventCheckpoints: ['Ingreso'],
         eventDailySchedule: null,
-        eventDaysList: []
+        eventDaysList: [],
+        eventHasKit: false
       }
     }
   }, [eventRequiredFields])
@@ -404,7 +424,34 @@ export default function RegistrationsTable({
   const registeredCount = registrations.filter(r => r.status === 'REGISTRADO').length
   const cancelledCount = registrations.filter(r => r.status === 'CANCELADO').length
   const kitDeliveredCount = registrations.filter(r => hasKit(r)).length
-  const kitPendingCount = registrations.filter(r => !hasKit(r) && r.status !== 'CANCELADO').length
+  const kitPendingCount = eventHasKit ? registrations.filter(r => !hasKit(r) && r.status !== 'CANCELADO').length : 0
+
+  // Desmarcar todos los kits para este evento en lote
+  const handleClearAllKits = async () => {
+    if (!confirm(`¿Estás seguro de que deseas desmarcar el Kit de Bienvenida para todos los participantes de este evento?\n\nEsta acción quitará el kit a los ${kitDeliveredCount} participante(s) que lo tienen registrado y desactivará la opción de kit para este evento.`)) {
+      return
+    }
+    setIsClearingAllKits(true)
+    try {
+      const res = await fetch(`/api/events/${eventId}/reconcile`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'clear_kits' })
+      })
+      const data = await res.json()
+      if (res.ok) {
+        showToast('success', data.message || 'Se desmarcaron todos los kits exitosamente.')
+        fetchLiveRegistrations(true)
+        router.refresh()
+      } else {
+        showToast('error', data.error || 'Error al desmarcar kits')
+      }
+    } catch (err: any) {
+      showToast('error', err.message || 'Error de conexión')
+    } finally {
+      setIsClearingAllKits(false)
+    }
+  }
 
   // Helper to format ISO or Date to datetime-local value (YYYY-MM-DDTHH:mm) in Colombia timezone
   const toDatetimeLocalValue = (dateInput?: Date | string | null): string => {
@@ -1040,6 +1087,56 @@ export default function RegistrationsTable({
         </div>
       </div>
 
+      {/* Alerta de Kits en evento sin kit */}
+      {!eventHasKit && kitDeliveredCount > 0 && (
+        <div style={{
+          backgroundColor: '#FEF2F2',
+          border: '1.5px solid #FECACA',
+          borderRadius: '12px',
+          padding: '1rem 1.25rem',
+          marginBottom: '1rem',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: '1rem'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flex: 1, minWidth: '280px' }}>
+            <span style={{ fontSize: '1.4rem' }}>⚠️</span>
+            <div>
+              <strong style={{ color: '#991B1B', fontSize: '0.9rem' }}>
+                Este evento no incluye Kit de Bienvenida
+              </strong>
+              <p style={{ margin: '0.2rem 0 0', color: '#B91C1C', fontSize: '0.8rem' }}>
+                Hay <strong>{kitDeliveredCount}</strong> participante(s) con kit marcado. Puedes desmarcarlos a todos con un solo clic para limpiar las listas.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleClearAllKits}
+            disabled={isClearingAllKits}
+            style={{
+              backgroundColor: '#DC2626',
+              color: '#FFFFFF',
+              border: 'none',
+              borderRadius: '8px',
+              padding: '0.55rem 1rem',
+              fontSize: '0.82rem',
+              fontWeight: 800,
+              cursor: isClearingAllKits ? 'not-allowed' : 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.4rem',
+              boxShadow: '0 2px 6px rgba(220, 38, 38, 0.25)'
+            }}
+          >
+            <Trash2 size={14} />
+            <span>{isClearingAllKits ? 'Desmarcando kits...' : `🧹 Desmarcar todos los Kits (${kitDeliveredCount})`}</span>
+          </button>
+        </div>
+      )}
+
       {/* FILTER & SEARCH BAR */}
       <div style={{ 
         display: 'flex', 
@@ -1165,78 +1262,91 @@ export default function RegistrationsTable({
         </div>
 
         {/* Kit de Bienvenida Filter Pills */}
-        <div style={{ 
-          display: 'flex', 
-          flexWrap: 'wrap', 
-          gap: '0.45rem', 
-          alignItems: 'center', 
-          width: '100%', 
-          paddingTop: '0.75rem', 
-          borderTop: '1px dashed #CBD5E1' 
-        }}>
-          <span style={{ fontSize: '0.8rem', fontWeight: 800, color: '#1E293B', marginRight: '0.35rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-            🎒 Filtro de Kit de Bienvenida:
-          </span>
-          <button
-            type="button"
-            onClick={() => setKitFilter('ALL')}
-            style={{
-              padding: '0.35rem 0.8rem',
-              borderRadius: '20px',
-              fontSize: '0.8rem',
-              fontWeight: 700,
-              cursor: 'pointer',
-              border: kitFilter === 'ALL' ? '2px solid #6366F1' : '1px solid #CBD5E1',
-              backgroundColor: kitFilter === 'ALL' ? '#EEF2FF' : '#FFFFFF',
-              color: kitFilter === 'ALL' ? '#4F46E5' : '#475569'
-            }}
-          >
-            Todos ({totalCount})
-          </button>
-          <button
-            type="button"
-            onClick={() => setKitFilter('WITH_KIT')}
-            style={{
-              padding: '0.35rem 0.8rem',
-              borderRadius: '20px',
-              fontSize: '0.8rem',
-              fontWeight: 700,
-              cursor: 'pointer',
-              border: kitFilter === 'WITH_KIT' ? '2px solid #16A34A' : '1px solid #CBD5E1',
-              backgroundColor: kitFilter === 'WITH_KIT' ? '#DCFCE7' : '#FFFFFF',
-              color: kitFilter === 'WITH_KIT' ? '#15803D' : '#475569'
-            }}
-          >
-            ✅ Recibieron Kit ({kitDeliveredCount})
-          </button>
-          <button
-            type="button"
-            onClick={() => setKitFilter('WITHOUT_KIT')}
-            style={{
-              padding: '0.35rem 0.8rem',
-              borderRadius: '20px',
-              fontSize: '0.8rem',
-              fontWeight: 700,
-              cursor: 'pointer',
-              border: kitFilter === 'WITHOUT_KIT' ? '2px solid #D97706' : '1px solid #CBD5E1',
-              backgroundColor: kitFilter === 'WITHOUT_KIT' ? '#FEF3C7' : '#FFFFFF',
-              color: kitFilter === 'WITHOUT_KIT' ? '#B45309' : '#475569'
-            }}
-          >
-            ⏳ Faltan por Kit ({kitPendingCount})
-          </button>
+        {(eventHasKit || kitDeliveredCount > 0) && (
+          <div style={{ 
+            display: 'flex', 
+            flexWrap: 'wrap', 
+            gap: '0.45rem', 
+            alignItems: 'center', 
+            width: '100%', 
+            paddingTop: '0.75rem', 
+            borderTop: '1px dashed #CBD5E1' 
+          }}>
+            <span style={{ fontSize: '0.8rem', fontWeight: 800, color: '#1E293B', marginRight: '0.35rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+              🎒 Filtro de Kit de Bienvenida:
+            </span>
+            {!eventHasKit && (
+              <span style={{ fontSize: '0.7rem', backgroundColor: '#FEE2E2', color: '#DC2626', padding: '0.15rem 0.45rem', borderRadius: '4px', fontWeight: 800 }}>
+                Desactivado
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => setKitFilter('ALL')}
+              style={{
+                padding: '0.35rem 0.8rem',
+                borderRadius: '20px',
+                fontSize: '0.8rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+                border: kitFilter === 'ALL' ? '2px solid #6366F1' : '1px solid #CBD5E1',
+                backgroundColor: kitFilter === 'ALL' ? '#EEF2FF' : '#FFFFFF',
+                color: kitFilter === 'ALL' ? '#4F46E5' : '#475569'
+              }}
+            >
+              Todos ({totalCount})
+            </button>
+            <button
+              type="button"
+              onClick={() => setKitFilter('WITH_KIT')}
+              style={{
+                padding: '0.35rem 0.8rem',
+                borderRadius: '20px',
+                fontSize: '0.8rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+                border: kitFilter === 'WITH_KIT' ? '2px solid #16A34A' : '1px solid #CBD5E1',
+                backgroundColor: kitFilter === 'WITH_KIT' ? '#DCFCE7' : '#FFFFFF',
+                color: kitFilter === 'WITH_KIT' ? '#15803D' : '#475569'
+              }}
+            >
+              ✅ Recibieron Kit ({kitDeliveredCount})
+            </button>
+            {eventHasKit && (
+              <button
+                type="button"
+                onClick={() => setKitFilter('WITHOUT_KIT')}
+                style={{
+                  padding: '0.35rem 0.8rem',
+                  borderRadius: '20px',
+                  fontSize: '0.8rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  border: kitFilter === 'WITHOUT_KIT' ? '2px solid #D97706' : '1px solid #CBD5E1',
+                  backgroundColor: kitFilter === 'WITHOUT_KIT' ? '#FEF3C7' : '#FFFFFF',
+                  color: kitFilter === 'WITHOUT_KIT' ? '#B45309' : '#475569'
+                }}
+              >
+                ⏳ Faltan por Kit ({kitPendingCount})
+              </button>
+            )}
 
-          {/* Kit Delivery Summary Stats */}
-          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '0.75rem', fontSize: '0.78rem', color: '#64748B' }}>
-            <span>
-              Progreso: <strong style={{ color: '#0F172A' }}>{totalCount > 0 ? Math.round((kitDeliveredCount / totalCount) * 100) : 0}%</strong>
-            </span>
-            <span style={{ color: '#94A3B8' }}>•</span>
-            <span style={{ color: '#B45309', fontWeight: 700 }}>
-              Pendientes: {kitPendingCount}
-            </span>
+            {/* Kit Delivery Summary Stats */}
+            <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '0.75rem', fontSize: '0.78rem', color: '#64748B' }}>
+              <span>
+                Progreso: <strong style={{ color: '#0F172A' }}>{totalCount > 0 ? Math.round((kitDeliveredCount / totalCount) * 100) : 0}%</strong>
+              </span>
+              {eventHasKit && (
+                <>
+                  <span style={{ color: '#94A3B8' }}>•</span>
+                  <span style={{ color: '#B45309', fontWeight: 700 }}>
+                    Pendientes: {kitPendingCount}
+                  </span>
+                </>
+              )}
+            </div>
           </div>
-        </div>
+        )}
 
         {/* FILTRO POR CUALQUIER ENTREGA O REFRIGERIO */}
         <div style={{
@@ -1434,7 +1544,9 @@ export default function RegistrationsTable({
                 <th style={{ padding: '0.75rem 1rem', fontSize: '0.8rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase' }}>Documento</th>
                 <th style={{ padding: '0.75rem 1rem', fontSize: '0.8rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase' }}>Municipio & Contacto</th>
                 <th style={{ padding: '0.75rem 1rem', fontSize: '0.8rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase' }}>Estado</th>
-                <th style={{ padding: '0.75rem 1rem', fontSize: '0.8rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase' }}>🎒 Kit Bienvenida</th>
+                {(eventHasKit || kitDeliveredCount > 0) && (
+                  <th style={{ padding: '0.75rem 1rem', fontSize: '0.8rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase' }}>🎒 Kit Bienvenida</th>
+                )}
                 <th style={{ padding: '0.75rem 1rem', fontSize: '0.8rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase' }}>🍱 Refrigerios & Entregas</th>
                 <th style={{ padding: '0.75rem 1rem', fontSize: '0.8rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase' }}>Inscripción</th>
                 <th style={{ padding: '0.75rem 1rem', fontSize: '0.8rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase', textAlign: 'center' }}>Acciones</th>
@@ -1582,137 +1694,145 @@ export default function RegistrationsTable({
                     </td>
 
                     {/* Kit de Bienvenida */}
-                    <td style={{ padding: '0.75rem 1rem' }}>
-                      {(() => {
-                        const kit = getKitScan(reg)
-                        if (kit) {
-                          const dateFormatted = new Date(kit.timestamp).toLocaleDateString('es-CO', {
-                            timeZone: 'America/Bogota',
-                            weekday: 'short',
-                            day: 'numeric',
-                            month: 'short'
-                          })
-                          const timeFormatted = new Date(kit.timestamp).toLocaleTimeString('es-CO', {
-                            timeZone: 'America/Bogota',
-                            hour: '2-digit',
-                            minute: '2-digit',
-                            hour12: true
-                          })
-                          return (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
-                              <span style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: '0.35rem',
-                                padding: '0.25rem 0.65rem',
-                                borderRadius: '20px',
-                                fontSize: '0.75rem',
-                                fontWeight: 800,
-                                backgroundColor: '#DCFCE7',
-                                color: '#15803D',
-                                border: '1px solid #86EFAC',
-                                width: 'fit-content'
-                              }}>
-                                🎒 Entregado
-                              </span>
-                              <span style={{ fontSize: '0.72rem', color: '#64748B' }}>
-                                {dateFormatted} • {timeFormatted}
-                              </span>
-                              {kit.attendedBy && (
-                                <span style={{ fontSize: '0.68rem', color: '#94A3B8' }}>
-                                  Por: {kit.attendedBy}
-                                </span>
-                              )}
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginTop: '0.15rem' }}>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    let cps: any[] = []
-                                    try {
-                                      cps = typeof reg.checkpoints === 'string' ? JSON.parse(reg.checkpoints) : reg.checkpoints
-                                    } catch(e) {}
-                                    const kitIdx = cps.findIndex((c: any) => isKitName(c?.name))
-                                    if (kitIdx >= 0) {
-                                      handleOpenEditCheckpointDateTime(reg, kitIdx)
-                                    }
-                                  }}
-                                  style={{
-                                    background: 'none',
-                                    border: 'none',
-                                    color: '#2563EB',
-                                    fontSize: '0.68rem',
-                                    textDecoration: 'underline',
-                                    cursor: 'pointer',
-                                    padding: 0
-                                  }}
-                                  title="Ajustar fecha y hora de entrega del kit"
-                                >
-                                  Editar fecha
-                                </button>
-                                <span style={{ fontSize: '0.68rem', color: '#CBD5E1' }}>•</span>
-                                <button
-                                  type="button"
-                                  onClick={() => handleToggleKit(reg, false)}
-                                  style={{
-                                    background: 'none',
-                                    border: 'none',
-                                    color: '#EF4444',
-                                    fontSize: '0.68rem',
-                                    textDecoration: 'underline',
-                                    cursor: 'pointer',
-                                    padding: 0
-                                  }}
-                                  title="Desmarcar entrega de kit (por error o duplicado)"
-                                >
-                                  Desmarcar
-                                </button>
-                              </div>
-                            </div>
-                          )
-                        } else {
-                          return (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
-                              <span style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: '0.35rem',
-                                padding: '0.25rem 0.65rem',
-                                borderRadius: '20px',
-                                fontSize: '0.75rem',
-                                fontWeight: 700,
-                                backgroundColor: '#FEF3C7',
-                                color: '#B45309',
-                                border: '1px solid #FDE68A',
-                                width: 'fit-content'
-                              }}>
-                                ⏳ Pendiente
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => handleToggleKit(reg, true)}
-                                style={{
+                    {(eventHasKit || kitDeliveredCount > 0) && (
+                      <td style={{ padding: '0.75rem 1rem' }}>
+                        {(() => {
+                          const kit = getKitScan(reg)
+                          if (kit) {
+                            const dateFormatted = new Date(kit.timestamp).toLocaleDateString('es-CO', {
+                              timeZone: 'America/Bogota',
+                              weekday: 'short',
+                              day: 'numeric',
+                              month: 'short'
+                            })
+                            const timeFormatted = new Date(kit.timestamp).toLocaleTimeString('es-CO', {
+                              timeZone: 'America/Bogota',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                              hour12: true
+                            })
+                            return (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                                <span style={{
                                   display: 'inline-flex',
                                   alignItems: 'center',
-                                  gap: '0.25rem',
-                                  backgroundColor: '#EFF6FF',
-                                  border: '1px solid #BFDBFE',
-                                  color: '#1D4ED8',
-                                  borderRadius: '6px',
-                                  padding: '0.2rem 0.5rem',
-                                  fontSize: '0.72rem',
-                                  fontWeight: 700,
-                                  cursor: 'pointer',
+                                  gap: '0.35rem',
+                                  padding: '0.25rem 0.65rem',
+                                  borderRadius: '20px',
+                                  fontSize: '0.75rem',
+                                  fontWeight: 800,
+                                  backgroundColor: '#DCFCE7',
+                                  color: '#15803D',
+                                  border: '1px solid #86EFAC',
                                   width: 'fit-content'
-                                }}
-                                title="Marcar kit de bienvenida entregado (con selección de fecha y hora)"
-                              >
-                                + Marcar Kit
-                              </button>
-                            </div>
-                          )
-                        }
-                      })()}
-                    </td>
+                                }}>
+                                  🎒 Entregado
+                                </span>
+                                <span style={{ fontSize: '0.72rem', color: '#64748B' }}>
+                                  {dateFormatted} • {timeFormatted}
+                                </span>
+                                {kit.attendedBy && (
+                                  <span style={{ fontSize: '0.68rem', color: '#94A3B8' }}>
+                                    Por: {kit.attendedBy}
+                                  </span>
+                                )}
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginTop: '0.15rem' }}>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      let cps: any[] = []
+                                      try {
+                                        cps = typeof reg.checkpoints === 'string' ? JSON.parse(reg.checkpoints) : reg.checkpoints
+                                      } catch(e) {}
+                                      const kitIdx = cps.findIndex((c: any) => isKitName(c?.name))
+                                      if (kitIdx >= 0) {
+                                        handleOpenEditCheckpointDateTime(reg, kitIdx)
+                                      }
+                                    }}
+                                    style={{
+                                      background: 'none',
+                                      border: 'none',
+                                      color: '#2563EB',
+                                      fontSize: '0.68rem',
+                                      textDecoration: 'underline',
+                                      cursor: 'pointer',
+                                      padding: 0
+                                    }}
+                                    title="Ajustar fecha y hora de entrega del kit"
+                                  >
+                                    Editar fecha
+                                  </button>
+                                  <span style={{ fontSize: '0.68rem', color: '#CBD5E1' }}>•</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleKit(reg, false)}
+                                    style={{
+                                      background: 'none',
+                                      border: 'none',
+                                      color: '#EF4444',
+                                      fontSize: '0.68rem',
+                                      textDecoration: 'underline',
+                                      cursor: 'pointer',
+                                      padding: 0
+                                    }}
+                                    title="Desmarcar entrega de kit (por error o duplicado)"
+                                  >
+                                    Desmarcar
+                                  </button>
+                                </div>
+                              </div>
+                            )
+                          } else if (!eventHasKit) {
+                            return (
+                              <span style={{ fontSize: '0.75rem', color: '#94A3B8', fontWeight: 600 }}>
+                                — No aplica
+                              </span>
+                            )
+                          } else {
+                            return (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                                <span style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '0.35rem',
+                                  padding: '0.25rem 0.65rem',
+                                  borderRadius: '20px',
+                                  fontSize: '0.75rem',
+                                  fontWeight: 700,
+                                  backgroundColor: '#FEF3C7',
+                                  color: '#B45309',
+                                  border: '1px solid #FDE68A',
+                                  width: 'fit-content'
+                                }}>
+                                  ⏳ Pendiente
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleKit(reg, true)}
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '0.25rem',
+                                    backgroundColor: '#EFF6FF',
+                                    border: '1px solid #BFDBFE',
+                                    color: '#1D4ED8',
+                                    borderRadius: '6px',
+                                    padding: '0.2rem 0.5rem',
+                                    fontSize: '0.72rem',
+                                    fontWeight: 700,
+                                    cursor: 'pointer',
+                                    width: 'fit-content'
+                                  }}
+                                  title="Marcar kit de bienvenida entregado (con selección de fecha y hora)"
+                                >
+                                  + Marcar Kit
+                                </button>
+                              </div>
+                            )
+                          }
+                        })()}
+                      </td>
+                    )}
 
                     {/* Entregas y Refrigerios en Vivo */}
                     <td style={{ padding: '0.75rem 1rem', minWidth: '240px', maxWidth: '340px' }}>
@@ -2863,120 +2983,122 @@ export default function RegistrationsTable({
                 </div>
 
                 {/* ESTADO KIT DE BIENVENIDA */}
-                <div style={{
-                  backgroundColor: hasKit(viewingReg) ? '#F0FDF4' : '#FFFBEB',
-                  borderRadius: '12px',
-                  padding: '1rem',
-                  border: `1.5px solid ${hasKit(viewingReg) ? '#BBF7D0' : '#FDE68A'}`,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  flexWrap: 'wrap',
-                  gap: '0.75rem'
-                }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                    <div style={{ fontSize: '1.5rem' }}>🎒</div>
-                    <div>
-                      <h4 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 800, color: hasKit(viewingReg) ? '#166534' : '#92400E' }}>
-                        Kit de Bienvenida: {hasKit(viewingReg) ? 'ENTREGADO' : 'PENDIENTE POR ENTREGAR'}
-                      </h4>
-                      {(() => {
-                        const kit = getKitScan(viewingReg)
-                        if (kit) {
-                          const dateStr = new Date(kit.timestamp).toLocaleDateString('es-CO', {
-                            timeZone: 'America/Bogota',
-                            weekday: 'long',
-                            day: 'numeric',
-                            month: 'short'
-                          })
-                          const hourStr = new Date(kit.timestamp).toLocaleTimeString('es-CO', {
-                            timeZone: 'America/Bogota',
-                            hour: '2-digit',
-                            minute: '2-digit',
-                            hour12: true
-                          })
+                {(eventHasKit || hasKit(viewingReg)) && (
+                  <div style={{
+                    backgroundColor: hasKit(viewingReg) ? '#F0FDF4' : '#FFFBEB',
+                    borderRadius: '12px',
+                    padding: '1rem',
+                    border: `1.5px solid ${hasKit(viewingReg) ? '#BBF7D0' : '#FDE68A'}`,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    flexWrap: 'wrap',
+                    gap: '0.75rem'
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                      <div style={{ fontSize: '1.5rem' }}>🎒</div>
+                      <div>
+                        <h4 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 800, color: hasKit(viewingReg) ? '#166534' : '#92400E' }}>
+                          Kit de Bienvenida: {hasKit(viewingReg) ? 'ENTREGADO' : 'PENDIENTE POR ENTREGAR'}
+                        </h4>
+                        {(() => {
+                          const kit = getKitScan(viewingReg)
+                          if (kit) {
+                            const dateStr = new Date(kit.timestamp).toLocaleDateString('es-CO', {
+                              timeZone: 'America/Bogota',
+                              weekday: 'long',
+                              day: 'numeric',
+                              month: 'short'
+                            })
+                            const hourStr = new Date(kit.timestamp).toLocaleTimeString('es-CO', {
+                              timeZone: 'America/Bogota',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                              hour12: true
+                            })
+                            return (
+                              <p style={{ margin: '0.15rem 0 0', fontSize: '0.8rem', color: '#15803D' }}>
+                                Entregado el {dateStr} a las {hourStr} {kit.attendedBy ? `(Atendido por: ${kit.attendedBy})` : ''}
+                              </p>
+                            )
+                          }
                           return (
-                            <p style={{ margin: '0.15rem 0 0', fontSize: '0.8rem', color: '#15803D' }}>
-                              Entregado el {dateStr} a las {hourStr} {kit.attendedBy ? `(Atendido por: ${kit.attendedBy})` : ''}
+                            <p style={{ margin: '0.15rem 0 0', fontSize: '0.8rem', color: '#B45309' }}>
+                              Este participante no tiene registrada la entrega del kit en ninguno de los días.
                             </p>
                           )
-                        }
-                        return (
-                          <p style={{ margin: '0.15rem 0 0', fontSize: '0.8rem', color: '#B45309' }}>
-                            Este participante no tiene registrada la entrega del kit en ninguno de los días.
-                          </p>
-                        )
-                      })()}
+                        })()}
+                      </div>
+                    </div>
+
+                    <div>
+                      {hasKit(viewingReg) ? (
+                        <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              let cpsList: any[] = []
+                              try {
+                                cpsList = typeof viewingReg.checkpoints === 'string' ? JSON.parse(viewingReg.checkpoints) : viewingReg.checkpoints
+                              } catch(e) {}
+                              const kitIdx = cpsList.findIndex((c: any) => isKitName(c?.name))
+                              if (kitIdx >= 0) {
+                                handleOpenEditCheckpointDateTime(viewingReg, kitIdx)
+                              }
+                            }}
+                            style={{
+                              padding: '0.4rem 0.8rem',
+                              backgroundColor: '#EFF6FF',
+                              color: '#1D4ED8',
+                              border: '1px solid #BFDBFE',
+                              borderRadius: '8px',
+                              fontSize: '0.78rem',
+                              fontWeight: 700,
+                              cursor: 'pointer'
+                            }}
+                            title="Ajustar fecha y hora de entrega del kit"
+                          >
+                            ✏️ Editar Fecha/Hora
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleToggleKit(viewingReg, false)}
+                            style={{
+                              padding: '0.4rem 0.8rem',
+                              backgroundColor: '#FEF2F2',
+                              color: '#DC2626',
+                              border: '1px solid #FECACA',
+                              borderRadius: '8px',
+                              fontSize: '0.78rem',
+                              fontWeight: 700,
+                              cursor: 'pointer'
+                            }}
+                          >
+                            Desmarcar Kit
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleToggleKit(viewingReg, true)}
+                          style={{
+                            padding: '0.4rem 0.8rem',
+                            backgroundColor: '#16A34A',
+                            color: '#FFFFFF',
+                            border: 'none',
+                            borderRadius: '8px',
+                            fontSize: '0.78rem',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                            boxShadow: '0 2px 5px rgba(220, 38, 38, 0.3)'
+                          }}
+                        >
+                          + Marcar Kit como Entregado
+                        </button>
+                      )}
                     </div>
                   </div>
-
-                  <div>
-                    {hasKit(viewingReg) ? (
-                      <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            let cpsList: any[] = []
-                            try {
-                              cpsList = typeof viewingReg.checkpoints === 'string' ? JSON.parse(viewingReg.checkpoints) : viewingReg.checkpoints
-                            } catch(e) {}
-                            const kitIdx = cpsList.findIndex((c: any) => isKitName(c?.name))
-                            if (kitIdx >= 0) {
-                              handleOpenEditCheckpointDateTime(viewingReg, kitIdx)
-                            }
-                          }}
-                          style={{
-                            padding: '0.4rem 0.8rem',
-                            backgroundColor: '#EFF6FF',
-                            color: '#1D4ED8',
-                            border: '1px solid #BFDBFE',
-                            borderRadius: '8px',
-                            fontSize: '0.78rem',
-                            fontWeight: 700,
-                            cursor: 'pointer'
-                          }}
-                          title="Ajustar fecha y hora de entrega del kit"
-                        >
-                          ✏️ Editar Fecha/Hora
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleToggleKit(viewingReg, false)}
-                          style={{
-                            padding: '0.4rem 0.8rem',
-                            backgroundColor: '#FEF2F2',
-                            color: '#DC2626',
-                            border: '1px solid #FECACA',
-                            borderRadius: '8px',
-                            fontSize: '0.78rem',
-                            fontWeight: 700,
-                            cursor: 'pointer'
-                          }}
-                        >
-                          Desmarcar Kit
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => handleToggleKit(viewingReg, true)}
-                        style={{
-                          padding: '0.4rem 0.8rem',
-                          backgroundColor: '#16A34A',
-                          color: '#FFFFFF',
-                          border: 'none',
-                          borderRadius: '8px',
-                          fontSize: '0.78rem',
-                          fontWeight: 700,
-                          cursor: 'pointer',
-                          boxShadow: '0 2px 5px rgba(22, 163, 74, 0.3)'
-                        }}
-                      >
-                        + Marcar Kit como Entregado
-                      </button>
-                    )}
-                  </div>
-                </div>
+                )}
 
                 {/* CHECKPOINTS REGISTRADOS */}
                 <div style={{ backgroundColor: '#F8FAFC', borderRadius: '12px', padding: '1rem', border: '1px solid #E2E8F0' }}>
@@ -3391,7 +3513,8 @@ export default function RegistrationsTable({
               <div style={{ overflowY: 'auto', padding: '1.25rem 1.5rem', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
                 
                 {/* 1. SECCIÓN KIT DE BIENVENIDA */}
-                <div style={{
+                {(eventHasKit || hasKitVal) && (
+                  <div style={{
                   backgroundColor: hasKitVal ? '#F0FDF4' : '#FFFBEB',
                   borderRadius: '12px',
                   padding: '1rem 1.25rem',
@@ -3502,6 +3625,7 @@ export default function RegistrationsTable({
                     )}
                   </div>
                 </div>
+              )}
 
                 {/* 2. SECCIÓN REFRIGERIOS ORGANIZADOS POR DÍA */}
                 {eventDaysList && eventDaysList.length > 0 ? (

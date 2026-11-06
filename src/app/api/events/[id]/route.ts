@@ -57,10 +57,21 @@ export async function PATCH(
         : []
     }
 
+    if (body.hasKit !== undefined) {
+      requiredFieldsObj.hasKit = Boolean(body.hasKit)
+    }
+
     if (body.checkpoints !== undefined) {
-      requiredFieldsObj.checkpoints = Array.isArray(body.checkpoints)
+      const cpsList = Array.isArray(body.checkpoints)
         ? body.checkpoints.map((c: string) => c.toString().trim()).filter(Boolean)
         : []
+      requiredFieldsObj.checkpoints = cpsList
+      if (body.hasKit === undefined) {
+        requiredFieldsObj.hasKit = cpsList.some((c: string) => {
+          const n = c.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+          return n.includes('kit') || n.includes('bienvenida')
+        })
+      }
     }
 
     if (body.dailySchedule !== undefined) {

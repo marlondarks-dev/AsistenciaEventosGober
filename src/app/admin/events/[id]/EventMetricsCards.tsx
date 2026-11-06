@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo } from 'react'
 import Link from 'next/link'
-import { Users, UserCheck, QrCode, Printer, ExternalLink, RefreshCw, Utensils, CheckCircle2, Clock, Sparkles, Filter } from 'lucide-react'
+import { Users, UserCheck, QrCode, Printer, ExternalLink, RefreshCw, Utensils, CheckCircle2, Clock, Sparkles, Filter, Trash2 } from 'lucide-react'
 import CopyLink from './CopyLink'
 
 interface EventMetricsCardsProps {
@@ -22,7 +22,7 @@ export default function EventMetricsCards({
   initialAttended,
   initialPending,
   initialCheckpoints,
-  initialConfiguredCheckpoints = ['Ingreso', 'Kit de Bienvenida'],
+  initialConfiguredCheckpoints = ['Ingreso'],
   initialAttendedWithoutIngreso = 0,
   eventRequiredFields
 }: EventMetricsCardsProps) {
@@ -34,6 +34,7 @@ export default function EventMetricsCards({
   const [attendedWithoutIngreso, setAttendedWithoutIngreso] = useState(initialAttendedWithoutIngreso)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [isSyncingIngreso, setIsSyncingIngreso] = useState(false)
+  const [isClearingKits, setIsClearingKits] = useState(false)
   const [lastSyncTime, setLastSyncTime] = useState<string>('')
 
   // Sync state if props change from server
@@ -135,6 +136,58 @@ export default function EventMetricsCards({
     }
   }
 
+  // Helper: check if checkpoint is kit
+  const isKit = (name: string) => {
+    if (!name) return false
+    const n = name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    return n.includes('kit') || n.includes('bienvenida')
+  }
+
+  // Check if event explicitly has kit configured
+  const eventHasKit = useMemo(() => {
+    try {
+      const parsed = eventRequiredFields ? JSON.parse(eventRequiredFields) : {}
+      if (parsed.hasKit === false) return false
+      if (parsed.hasKit === true) return true
+      if (Array.isArray(parsed.checkpoints)) {
+        return parsed.checkpoints.some((c: string) => isKit(c))
+      }
+      return configuredCheckpoints.some(c => isKit(c))
+    } catch {
+      return configuredCheckpoints.some(c => isKit(c))
+    }
+  }, [eventRequiredFields, configuredCheckpoints])
+
+  // Desmarcar todos los kits para este evento
+  const handleClearKits = async () => {
+    const kitCount = checkpoints['Kit de Bienvenida'] || 0
+    if (!confirm(`¿Deseas desmarcar el Kit de Bienvenida para todos los participantes de este evento?\n\nEsta acción eliminará el registro de kit para ${kitCount > 0 ? kitCount + ' participante(s)' : 'todos'} y desactivará el Kit para este evento.`)) {
+      return
+    }
+    setIsClearingKits(true)
+    try {
+      const res = await fetch(`/api/events/${eventId}/reconcile`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'clear_kits' })
+      })
+      const data = await res.json()
+      if (res.ok) {
+        alert(`✅ ${data.message}`)
+        fetchLatestStats(true)
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('registrations-refreshed'))
+        }
+      } else {
+        alert(`❌ ${data.error || 'Error al desmarcar kits'}`)
+      }
+    } catch (err: any) {
+      alert(`❌ Error de conexión: ${err.message}`)
+    } finally {
+      setIsClearingKits(false)
+    }
+  }
+
   // Helper: icon according to delivery type
   const getCheckpointIcon = (name: string) => {
     const n = name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
@@ -149,21 +202,41 @@ export default function EventMetricsCards({
 
   // Combined list of all checkpoints to display (configured + any that exist in DB)
   const allCheckpointNames = useMemo(() => {
-    const set = new Set<string>(configuredCheckpoints)
-    Object.keys(checkpoints).forEach(k => set.add(k))
-    // Prioritize Ingreso, then Kit, then others
+    const set = new Set<string>()
+
+    // Add configured checkpoints
+    configuredCheckpoints.forEach(cp => {
+      if (isKit(cp)) {
+        if (eventHasKit) set.add('Kit de Bienvenida')
+      } else {
+        set.add(cp)
+      }
+    })
+
+    // Add recorded checkpoints from registrations
+    Object.keys(checkpoints).forEach(k => {
+      if (isKit(k)) {
+        // Only include Kit if event has it OR there are actual deliveries recorded
+        if (eventHasKit || (checkpoints[k] || 0) > 0) {
+          set.add('Kit de Bienvenida')
+        }
+      } else {
+        set.add(k)
+      }
+    })
+
     const arr = Array.from(set)
     arr.sort((a, b) => {
       if (a === 'Ingreso') return -1
       if (b === 'Ingreso') return 1
-      const aIsKit = a.toLowerCase().includes('kit')
-      const bIsKit = b.toLowerCase().includes('kit')
+      const aIsKit = isKit(a)
+      const bIsKit = isKit(b)
       if (aIsKit && !bIsKit) return -1
       if (!aIsKit && bIsKit) return 1
       return a.localeCompare(b)
     })
     return arr
-  }, [configuredCheckpoints, checkpoints])
+  }, [configuredCheckpoints, checkpoints, eventHasKit])
 
   // Total deliveries performed across all checkpoints
   const totalDeliveriesPerformed = useMemo(() => {
@@ -360,6 +433,57 @@ export default function EventMetricsCards({
           </div>
         )}
 
+        {/* Informative Diagnostic Banner if Kit is recorded on an event that does not use Kit */}
+        {(!eventHasKit && (checkpoints['Kit de Bienvenida'] || 0) > 0) && (
+          <div style={{
+            backgroundColor: '#FEF2F2',
+            border: '1.5px solid #FECACA',
+            borderRadius: '12px',
+            padding: '1rem 1.25rem',
+            marginBottom: '1.5rem',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '1rem'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flex: 1, minWidth: '280px' }}>
+              <span style={{ fontSize: '1.4rem', lineHeight: 1 }}>⚠️</span>
+              <div style={{ fontSize: '0.84rem', color: '#991B1B', lineHeight: '1.45' }}>
+                <strong>Este evento no incluye Kit de Bienvenida</strong>
+                <p style={{ margin: '0.2rem 0 0', color: '#B91C1C' }}>
+                  Se registran <strong>{checkpoints['Kit de Bienvenida'] || 0}</strong> entregas de Kit marcadas. Puedes desmarcar todos los kits de este evento con un solo clic.
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleClearKits}
+              disabled={isClearingKits}
+              style={{
+                backgroundColor: '#DC2626',
+                color: '#FFFFFF',
+                border: 'none',
+                borderRadius: '8px',
+                padding: '0.55rem 0.95rem',
+                fontSize: '0.8rem',
+                fontWeight: 800,
+                cursor: isClearingKits ? 'not-allowed' : 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+                boxShadow: '0 2px 6px rgba(220, 38, 38, 0.25)',
+                whiteSpace: 'nowrap'
+              }}
+              title="Desmarcar todos los kits de este evento"
+            >
+              <Trash2 size={14} />
+              <span>{isClearingKits ? 'Desmarcando kits...' : `🧹 Desmarcar todos los Kits (${checkpoints['Kit de Bienvenida'] || 0})`}</span>
+            </button>
+          </div>
+        )}
+
         {/* GRID OF CHECKPOINT DELIVERY METRICS */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
           {allCheckpointNames.map(cpName => {
@@ -367,6 +491,8 @@ export default function EventMetricsCards({
             const percentage = attended > 0 ? Math.round((delivered / attended) * 100) : 0
             const pendingForDelivery = Math.max(0, attended - delivered)
             const icon = getCheckpointIcon(cpName)
+            const isKitItem = isKit(cpName)
+            const isKitDisabledInEvent = isKitItem && !eventHasKit
 
             return (
               <div
@@ -374,7 +500,7 @@ export default function EventMetricsCards({
                 style={{
                   backgroundColor: '#FFFFFF',
                   borderRadius: '12px',
-                  border: '1.5px solid #E2E8F0',
+                  border: isKitDisabledInEvent ? '1.5px dashed #FCA5A5' : '1.5px solid #E2E8F0',
                   padding: '1.1rem',
                   display: 'flex',
                   flexDirection: 'column',
@@ -390,11 +516,18 @@ export default function EventMetricsCards({
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                       <span style={{ fontSize: '1.4rem' }}>{icon}</span>
                       <div>
-                        <h4 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 800, color: '#0F172A' }}>
-                          {cpName}
-                        </h4>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                          <h4 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 800, color: '#0F172A' }}>
+                            {cpName}
+                          </h4>
+                          {isKitDisabledInEvent && (
+                            <span style={{ fontSize: '0.65rem', fontWeight: 800, backgroundColor: '#FEE2E2', color: '#DC2626', padding: '0.1rem 0.4rem', borderRadius: '4px' }}>
+                              No aplica
+                            </span>
+                          )}
+                        </div>
                         <span style={{ fontSize: '0.72rem', color: '#64748B' }}>
-                          Punto de control
+                          {isKitDisabledInEvent ? 'Desactivado en este evento' : 'Punto de control'}
                         </span>
                       </div>
                     </div>

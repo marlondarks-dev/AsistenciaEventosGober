@@ -35,12 +35,19 @@ export async function GET(
       return NextResponse.json({ error: 'Evento no encontrado' }, { status: 404 })
     }
 
-    let configuredCheckpoints: string[] = ['Ingreso', 'Kit de Bienvenida']
+    let configuredCheckpoints: string[] = ['Ingreso']
+    let hasKitConfigured = false
     try {
       const parsedConfig = event.requiredFields ? JSON.parse(event.requiredFields) : {}
       if (Array.isArray(parsedConfig.checkpoints) && parsedConfig.checkpoints.length > 0) {
         configuredCheckpoints = parsedConfig.checkpoints
+      } else if (parsedConfig.hasKit !== false) {
+        configuredCheckpoints = ['Ingreso', 'Kit de Bienvenida']
       }
+      if (parsedConfig.hasKit === false) {
+        configuredCheckpoints = configuredCheckpoints.filter(cp => !isKitName(cp))
+      }
+      hasKitConfigured = configuredCheckpoints.some(c => isKitName(c))
     } catch (e) {}
 
     const totalCount = event.registrations.length
@@ -72,7 +79,7 @@ export async function GET(
 
       if (r.status === 'ASISTIO') {
         if (!hasIngreso) attendedWithoutIngreso++
-        if (!hasKit) attendedWithoutKit++
+        if (hasKitConfigured && !hasKit) attendedWithoutKit++
       }
 
       cps.forEach((c: any) => {
@@ -91,7 +98,8 @@ export async function GET(
       attendedWithoutIngreso,
       attendedWithoutKit,
       configuredCheckpoints,
-      deliveriesCount
+      deliveriesCount,
+      hasKitConfigured
     }, {
       headers: {
         'Cache-Control': 'no-store, no-cache, must-revalidate',
@@ -164,6 +172,101 @@ export async function POST(
         success: true,
         message: `Se sincronizó el punto "Ingreso" para ${updatedCount} asistentes verificados.`,
         updatedCount
+      })
+    }
+
+    if (action === 'clear_kits') {
+      let clearedCount = 0
+
+      for (const reg of event.registrations) {
+        let cps: any[] = []
+        try {
+          cps = typeof reg.checkpoints === 'string' ? JSON.parse(reg.checkpoints || '[]') : (reg.checkpoints || [])
+          if (!Array.isArray(cps)) cps = []
+        } catch {
+          cps = []
+        }
+
+        const hadKit = cps.some((c: any) => c && isKitName(c.name))
+        if (hadKit) {
+          const newCps = cps.filter((c: any) => !c || !isKitName(c.name))
+          await prisma.registration.update({
+            where: { id: reg.id },
+            data: { checkpoints: JSON.stringify(newCps) }
+          })
+          clearedCount++
+        }
+      }
+
+      // Also ensure event requiredFields has hasKit: false and kit is removed from checkpoints & generalPoints
+      let requiredFieldsObj: any = {}
+      try {
+        requiredFieldsObj = event.requiredFields ? JSON.parse(event.requiredFields) : {}
+      } catch (e) {}
+
+      requiredFieldsObj.hasKit = false
+      if (Array.isArray(requiredFieldsObj.checkpoints)) {
+        requiredFieldsObj.checkpoints = requiredFieldsObj.checkpoints.filter((c: string) => !isKitName(c))
+      }
+      if (requiredFieldsObj.dailySchedule?.generalPoints) {
+        requiredFieldsObj.dailySchedule.generalPoints = requiredFieldsObj.dailySchedule.generalPoints.filter((p: string) => !isKitName(p))
+      }
+
+      await prisma.event.update({
+        where: { id: eventId },
+        data: { requiredFields: JSON.stringify(requiredFieldsObj) }
+      })
+
+      revalidatePath(`/admin/events/${eventId}`)
+      revalidatePath(`/admin/events/${eventId}/scanner`)
+      return NextResponse.json({
+        success: true,
+        message: `Se desmarcó el Kit de Bienvenida para ${clearedCount} participante(s) y se desactivó el Kit para este evento.`,
+        clearedCount
+      })
+    }
+
+    if (action === 'toggle_kit') {
+      const enableKit = Boolean(body.enableKit)
+      let requiredFieldsObj: any = {}
+      try {
+        requiredFieldsObj = event.requiredFields ? JSON.parse(event.requiredFields) : {}
+      } catch (e) {}
+
+      requiredFieldsObj.hasKit = enableKit
+      let cps = Array.isArray(requiredFieldsObj.checkpoints) ? [...requiredFieldsObj.checkpoints] : ['Ingreso']
+      let genPoints = Array.isArray(requiredFieldsObj.dailySchedule?.generalPoints) ? [...requiredFieldsObj.dailySchedule.generalPoints] : ['Ingreso']
+
+      if (enableKit) {
+        if (!cps.some((c: string) => isKitName(c))) {
+          cps.splice(1, 0, 'Kit de Bienvenida')
+        }
+        if (!genPoints.some((p: string) => isKitName(p))) {
+          genPoints.push('Kit de Bienvenida')
+        }
+      } else {
+        cps = cps.filter((c: string) => !isKitName(c))
+        genPoints = genPoints.filter((p: string) => !isKitName(p))
+      }
+
+      requiredFieldsObj.checkpoints = cps
+      if (!requiredFieldsObj.dailySchedule) {
+        requiredFieldsObj.dailySchedule = { generalPoints: genPoints, days: [] }
+      } else {
+        requiredFieldsObj.dailySchedule.generalPoints = genPoints
+      }
+
+      await prisma.event.update({
+        where: { id: eventId },
+        data: { requiredFields: JSON.stringify(requiredFieldsObj) }
+      })
+
+      revalidatePath(`/admin/events/${eventId}`)
+      revalidatePath(`/admin/events/${eventId}/scanner`)
+      return NextResponse.json({
+        success: true,
+        message: enableKit ? 'Kit de Bienvenida activado para este evento.' : 'Kit de Bienvenida desactivado para este evento.',
+        hasKit: enableKit
       })
     }
 

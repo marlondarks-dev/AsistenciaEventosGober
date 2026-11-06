@@ -277,11 +277,13 @@ export default function EventCheckpointsManager({
     }
 
     try {
+      const hasKit = checkpointsToSave.some(c => c.toLowerCase().includes('kit'))
       const res = await fetch(`/api/events/${eventId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           checkpoints: checkpointsToSave,
+          hasKit,
           dailySchedule: {
             days: schedule.days.map(d => ({ day: d.day, meals: d.meals })),
             generalPoints: schedule.generalPoints
@@ -459,6 +461,93 @@ export default function EventCheckpointsManager({
             <p style={{ fontSize: '0.8rem', color: '#64748B', margin: '0 0 0.85rem' }}>
               Puntos que se entregan solo una vez durante todo el evento (ej: primer ingreso al evento o entrega de escarapela/kit).
             </p>
+
+            {/* Quick Kit Toggle & Unmark Banner */}
+            <div style={{
+              backgroundColor: schedule.generalPoints.includes('Kit de Bienvenida') ? '#F0FDF4' : '#F8FAFC',
+              border: `1.5px solid ${schedule.generalPoints.includes('Kit de Bienvenida') ? '#BBF7D0' : '#E2E8F0'}`,
+              borderRadius: '12px',
+              padding: '0.85rem 1.1rem',
+              marginBottom: '1rem',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: '0.75rem'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                <span style={{ fontSize: '1.4rem' }}>🎒</span>
+                <div>
+                  <strong style={{ fontSize: '0.88rem', color: schedule.generalPoints.includes('Kit de Bienvenida') ? '#166534' : '#475569' }}>
+                    Kit de Bienvenida: {schedule.generalPoints.includes('Kit de Bienvenida') ? 'ACTIVADO' : 'DESACTIVADO'}
+                  </strong>
+                  <p style={{ margin: '0.15rem 0 0', fontSize: '0.78rem', color: '#64748B' }}>
+                    {schedule.generalPoints.includes('Kit de Bienvenida')
+                      ? 'Los participantes tendrán columna de Kit y seguimiento de entrega en este evento.'
+                      : 'Este evento no maneja entrega de kits (como en STEAM Challenge).'}
+                  </p>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={() => toggleGeneralPoint('Kit de Bienvenida')}
+                  style={{
+                    backgroundColor: schedule.generalPoints.includes('Kit de Bienvenida') ? '#DC2626' : '#16A34A',
+                    color: '#FFFFFF',
+                    border: 'none',
+                    borderRadius: '8px',
+                    padding: '0.45rem 0.85rem',
+                    fontSize: '0.8rem',
+                    fontWeight: 700,
+                    cursor: 'pointer'
+                  }}
+                >
+                  {schedule.generalPoints.includes('Kit de Bienvenida') ? 'Desactivar Kit en este evento' : 'Activar Kit'}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (!confirm(`¿Deseas desmarcar el Kit de Bienvenida para todos los participantes de este evento y retirarlo de las entregas?`)) return
+                    try {
+                      const res = await fetch(`/api/events/${eventId}/reconcile`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ action: 'clear_kits' })
+                      })
+                      const data = await res.json()
+                      if (res.ok) {
+                        showToast('success', data.message || 'Kits desmarcados')
+                        setSchedule(prev => ({
+                          ...prev,
+                          generalPoints: prev.generalPoints.filter(p => !p.toLowerCase().includes('kit'))
+                        }))
+                        router.refresh()
+                      } else {
+                        showToast('error', data.error || 'Error al desmarcar kits')
+                      }
+                    } catch(e: any) {
+                      showToast('error', e.message || 'Error de conexión')
+                    }
+                  }}
+                  style={{
+                    backgroundColor: '#FEE2E2',
+                    color: '#DC2626',
+                    border: '1px solid #FECACA',
+                    borderRadius: '8px',
+                    padding: '0.45rem 0.85rem',
+                    fontSize: '0.8rem',
+                    fontWeight: 700,
+                    cursor: 'pointer'
+                  }}
+                  title="Elimina las marcas de kit de los participantes y lo desactiva del evento"
+                >
+                  Limpiar / Desmarcar Kits
+                </button>
+              </div>
+            </div>
 
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.85rem' }}>
               {COMMON_GENERAL_POINTS.map(p => {

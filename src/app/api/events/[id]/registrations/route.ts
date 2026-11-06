@@ -38,13 +38,27 @@ export async function GET(
       }
     })
 
+    // Helper: normalize kit name
+    const isKit = (n: string) => {
+      if (!n) return false
+      const norm = n.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+      return norm.includes('kit') || norm.includes('bienvenida')
+    }
+
     // Checkpoint deliveries stats & configured list
-    let configuredCheckpoints: string[] = ['Ingreso', 'Kit de Bienvenida']
+    let configuredCheckpoints: string[] = ['Ingreso']
+    let hasKitConfigured = false
     try {
       const parsedConfig = event.requiredFields ? JSON.parse(event.requiredFields) : {}
       if (Array.isArray(parsedConfig.checkpoints) && parsedConfig.checkpoints.length > 0) {
         configuredCheckpoints = parsedConfig.checkpoints
+      } else if (parsedConfig.hasKit !== false) {
+        configuredCheckpoints = ['Ingreso', 'Kit de Bienvenida']
       }
+      if (parsedConfig.hasKit === false) {
+        configuredCheckpoints = configuredCheckpoints.filter(cp => !isKit(cp))
+      }
+      hasKitConfigured = configuredCheckpoints.some(c => isKit(c))
     } catch (e) {}
 
     const checkpointStats: Record<string, number> = {}
@@ -66,18 +80,12 @@ export async function GET(
         }
       }
 
-      const isKit = (n: string) => {
-        if (!n) return false
-        const norm = n.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-        return norm.includes('kit') || norm.includes('bienvenida')
-      }
-
       const hasIngreso = cps.some((c: any) => c && c.name === 'Ingreso')
       const hasKit = cps.some((c: any) => c && isKit(c.name))
 
       if (r.status === 'ASISTIO') {
         if (!hasIngreso) attendedWithoutIngreso++
-        if (!hasKit) attendedWithoutKit++
+        if (hasKitConfigured && !hasKit) attendedWithoutKit++
       }
 
       cps.forEach((cp: any) => {
