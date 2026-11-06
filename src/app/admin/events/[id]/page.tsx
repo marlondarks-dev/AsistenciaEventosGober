@@ -61,12 +61,14 @@ export default async function EventDetailPage({ params }: { params: Promise<{ id
   event.registrations.forEach(r => {
     if (r.checkpoints) {
       try {
-        const cps = JSON.parse(r.checkpoints)
-        cps.forEach((cp: any) => {
-          if (cp && cp.name) {
-            checkpointStats[cp.name] = (checkpointStats[cp.name] || 0) + 1
-          }
-        })
+        const cps = typeof r.checkpoints === 'string' ? JSON.parse(r.checkpoints) : r.checkpoints
+        if (Array.isArray(cps)) {
+          cps.forEach((cp: any) => {
+            if (cp && cp.name) {
+              checkpointStats[cp.name] = (checkpointStats[cp.name] || 0) + 1
+            }
+          })
+        }
       } catch(e) {}
     }
   })

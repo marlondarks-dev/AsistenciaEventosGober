@@ -242,6 +242,20 @@ export default function RegistrationsTable({
           return data.registrations
         })
 
+        // Also update managingCheckpointsReg if it is currently open
+        setManagingCheckpointsReg((prev: any) => {
+          if (!prev) return null
+          const fresh = data.registrations.find((r: any) => r.id === prev.id)
+          return fresh || prev
+        })
+
+        // Also update viewingReg if it is currently open
+        setViewingReg((prev: any) => {
+          if (!prev) return null
+          const fresh = data.registrations.find((r: any) => r.id === prev.id)
+          return fresh || prev
+        })
+
         const now = new Date()
         setLastSyncTime(now.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', second: '2-digit' }))
 
@@ -516,25 +530,26 @@ export default function RegistrationsTable({
       })
 
       if (!res.ok) throw new Error('Error al guardar la entrega del refrigerio/punto')
-
-      const updatedReg = {
+      const data = await res.json()
+      const savedReg = data.registration || {
         ...reg,
         checkpoints: JSON.stringify(cps),
         status: newStatus,
         attendedAt: reg.attendedAt || timestampISO
       }
 
-      setRegistrations(prev => prev.map(r => r.id === reg.id ? updatedReg : r))
+      setRegistrations(prev => prev.map(r => r.id === reg.id ? savedReg : r))
       
       if (viewingReg && viewingReg.id === reg.id) {
-        setViewingReg(updatedReg)
+        setViewingReg(savedReg)
       }
       if (managingCheckpointsReg && managingCheckpointsReg.id === reg.id) {
-        setManagingCheckpointsReg(updatedReg)
+        setManagingCheckpointsReg(savedReg)
       }
 
       setMarkingModal(null)
       showToast('success', isEdit ? 'Fecha y hora de entrega actualizada correctamente.' : `¡"${checkpointName}" marcado como entregado!`)
+      router.refresh()
       fetchLiveRegistrations(false)
     } catch (err: any) {
       showToast('error', err.message || 'Error al actualizar el registro')
@@ -587,15 +602,17 @@ export default function RegistrationsTable({
 
       if (!res.ok) throw new Error('Error al desmarcar el kit')
 
-      const updatedReg = { ...reg, checkpoints: JSON.stringify(cps) }
-      setRegistrations(prev => prev.map(r => r.id === reg.id ? updatedReg : r))
+      const data = await res.json()
+      const savedReg = data.registration || { ...reg, checkpoints: JSON.stringify(cps) }
+      setRegistrations(prev => prev.map(r => r.id === reg.id ? savedReg : r))
       if (viewingReg && viewingReg.id === reg.id) {
-        setViewingReg(updatedReg)
+        setViewingReg(savedReg)
       }
       if (managingCheckpointsReg && managingCheckpointsReg.id === reg.id) {
-        setManagingCheckpointsReg(updatedReg)
+        setManagingCheckpointsReg(savedReg)
       }
       showToast('success', 'Kit de Bienvenida desmarcado exitosamente.')
+      router.refresh()
       fetchLiveRegistrations(false)
     } catch (err: any) {
       showToast('error', err.message || 'Error al actualizar el kit')
@@ -631,15 +648,17 @@ export default function RegistrationsTable({
 
       if (!res.ok) throw new Error('Error al eliminar entrega')
 
-      const updatedReg = { ...reg, checkpoints: JSON.stringify(updatedCps) }
-      setRegistrations(prev => prev.map(r => r.id === regId ? updatedReg : r))
+      const data = await res.json()
+      const savedReg = data.registration || { ...reg, checkpoints: JSON.stringify(updatedCps) }
+      setRegistrations(prev => prev.map(r => r.id === regId ? savedReg : r))
       if (viewingReg && viewingReg.id === regId) {
-        setViewingReg(updatedReg)
+        setViewingReg(savedReg)
       }
       if (managingCheckpointsReg && managingCheckpointsReg.id === regId) {
-        setManagingCheckpointsReg(updatedReg)
+        setManagingCheckpointsReg(savedReg)
       }
       showToast('success', 'Entrega desmarcada correctamente.')
+      router.refresh()
       fetchLiveRegistrations(false)
     } catch (err: any) {
       showToast('error', err.message || 'Error al eliminar entrega')

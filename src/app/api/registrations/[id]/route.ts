@@ -74,24 +74,44 @@ export async function PATCH(
 
     // 1. Update registration status and checkpoints if provided
     const regUpdateData: any = {}
+
+    // Determine current checkpoints: prioritize body.checkpoints if provided, otherwise reg.checkpoints
+    let currentCheckpoints: any[] = []
     if (body.checkpoints !== undefined) {
-      regUpdateData.checkpoints = typeof body.checkpoints === 'string' ? body.checkpoints : JSON.stringify(body.checkpoints)
+      try {
+        currentCheckpoints = typeof body.checkpoints === 'string'
+          ? JSON.parse(body.checkpoints)
+          : body.checkpoints
+        if (!Array.isArray(currentCheckpoints)) currentCheckpoints = []
+      } catch {
+        currentCheckpoints = []
+      }
+      regUpdateData.checkpoints = JSON.stringify(currentCheckpoints)
+    } else if (reg.checkpoints) {
+      try {
+        currentCheckpoints = typeof reg.checkpoints === 'string'
+          ? JSON.parse(reg.checkpoints)
+          : reg.checkpoints
+        if (!Array.isArray(currentCheckpoints)) currentCheckpoints = []
+      } catch {
+        currentCheckpoints = []
+      }
     }
+
     if (status && status !== reg.status) {
       regUpdateData.status = status
       if (status === 'ASISTIO') {
         regUpdateData.attendedAt = reg.attendedAt || new Date()
         regUpdateData.attendedBy = reg.attendedBy || 'Administrador'
         
-        // Add Ingreso checkpoint if not present
-        const cpArray = reg.checkpoints ? JSON.parse(reg.checkpoints) : []
-        if (!cpArray.some((c: any) => c.name === 'Ingreso')) {
-          cpArray.push({
+        // Ensure "Ingreso" checkpoint is present without erasing any newly added refrigerios or checkpoints!
+        if (!currentCheckpoints.some((c: any) => c.name === 'Ingreso')) {
+          currentCheckpoints.unshift({
             name: 'Ingreso',
             timestamp: new Date().toISOString(),
             evidenceUrl: fotoIngreso || null
           })
-          regUpdateData.checkpoints = JSON.stringify(cpArray)
+          regUpdateData.checkpoints = JSON.stringify(currentCheckpoints)
         }
       } else if (status === 'REGISTRADO') {
         regUpdateData.attendedAt = null
