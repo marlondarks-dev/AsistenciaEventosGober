@@ -110,6 +110,35 @@ export async function GET(
       } catch (e) {}
     }
 
+    // Check if event has kits configured or if any kit was delivered
+    let eventHasKit = false
+    try {
+      const parsedReq = event.requiredFields ? (typeof event.requiredFields === 'string' ? JSON.parse(event.requiredFields) : event.requiredFields) : {}
+      if (parsedReq.hasKit === true) eventHasKit = true
+      else if (parsedReq.hasKit === false) eventHasKit = false
+      else if (Array.isArray(parsedReq.checkpoints)) {
+        eventHasKit = parsedReq.checkpoints.some((c: string) => {
+          const n = (c || '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+          return n.includes('kit') || n.includes('bienvenida')
+        })
+      }
+    } catch {}
+
+    const hasAnyKitDelivered = event.registrations.some(reg => {
+      if (!reg.checkpoints) return false
+      try {
+        const cps = JSON.parse(reg.checkpoints)
+        return Array.isArray(cps) && cps.some((c: any) => {
+          const n = (c?.name || '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+          return n.includes('kit') || n.includes('bienvenida')
+        })
+      } catch {
+        return false
+      }
+    })
+
+    const includeKitColumns = eventHasKit || hasAnyKitDelivered
+
     // Format data for Excel
     const dataToExport = event.registrations.map((reg, index) => {
       const p = reg.person || {}
@@ -160,9 +189,11 @@ export async function GET(
         'No.': index + 1,
         'ID Registro': reg.id,
         'Estado de Asistencia': reg.status,
-        'Kit de Bienvenida Entregado': hasKit ? 'SÍ' : 'NO',
-        'Kit de Bienvenida (Fecha y Hora)': kitScan ? formatColombiaDateTime(kitScan.timestamp) : 'Pendiente',
-        'Kit de Bienvenida (Atendido Por)': kitScan?.attendedBy || 'N/A',
+        ...(includeKitColumns ? {
+          'Kit de Bienvenida Entregado': hasKit ? 'SÍ' : 'NO',
+          'Kit de Bienvenida (Fecha y Hora)': kitScan ? formatColombiaDateTime(kitScan.timestamp) : 'Pendiente',
+          'Kit de Bienvenida (Atendido Por)': kitScan?.attendedBy || 'N/A',
+        } : {}),
         'Fecha de Inscripción': formatColombiaDateTime(reg.registeredAt),
         'Fecha y Hora Ingreso (Puerta)': reg.attendedAt ? formatColombiaDateTime(reg.attendedAt) : 'Pendiente',
         'Atendido Por': reg.attendedBy || 'N/A',

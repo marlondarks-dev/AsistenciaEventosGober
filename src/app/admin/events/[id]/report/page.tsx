@@ -34,7 +34,8 @@ export default async function EventReportPage({ params }: { params: Promise<{ id
           id: event.id,
           name: event.name,
           location: event.location,
-          startDate: event.startDate
+          startDate: event.startDate,
+          requiredFields: event.requiredFields
         }} 
         registrations={event.registrations} 
       />

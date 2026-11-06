@@ -30,6 +30,12 @@ interface ReportViewerProps {
   registrations: any[]
 }
 
+function isKitName(name: string): boolean {
+  if (!name) return false
+  const lower = name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+  return lower.includes('kit') || lower.includes('bienvenida')
+}
+
 function formatColombiaDateTime(dateInput: Date | string | null | undefined): string {
   if (!dateInput) return ''
   try {
@@ -62,6 +68,36 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
   const [onePerPage, setOnePerPage] = useState(false)
   const [isPrinting, setIsPrinting] = useState(false)
 
+  // Determine if this event has kits configured
+  const eventHasKit = useMemo(() => {
+    try {
+      const parsed = event?.requiredFields 
+        ? (typeof event.requiredFields === 'string' ? JSON.parse(event.requiredFields) : event.requiredFields) 
+        : {}
+      if (parsed.hasKit === false) return false
+      if (parsed.hasKit === true) return true
+      if (Array.isArray(parsed.checkpoints)) {
+        return parsed.checkpoints.some((c: string) => isKitName(c))
+      }
+      return false
+    } catch {
+      return false
+    }
+  }, [event?.requiredFields])
+
+  // Determine if any participant has had a kit delivered
+  const hasAnyKitDelivered = useMemo(() => {
+    return registrations.some(reg => {
+      if (!reg.checkpoints) return false
+      try {
+        const cps = typeof reg.checkpoints === 'string' ? JSON.parse(reg.checkpoints) : reg.checkpoints
+        return Array.isArray(cps) && cps.some((c: any) => isKitName(c?.name))
+      } catch {
+        return false
+      }
+    })
+  }, [registrations])
+
   // Filter registrations
   const filteredRegistrations = useMemo(() => {
     return registrations.filter(reg => {
@@ -74,19 +110,18 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
       let hasKit = false
       if (reg.checkpoints) {
         try {
-          const cps = JSON.parse(reg.checkpoints)
+          const cps = typeof reg.checkpoints === 'string' ? JSON.parse(reg.checkpoints) : reg.checkpoints
           if (Array.isArray(cps)) {
-            hasKit = cps.some((c: any) => {
-              const n = (c?.name || '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-              return n.includes('kit') || n.includes('bienvenida')
-            })
+            hasKit = cps.some((c: any) => isKitName(c?.name))
           }
         } catch (e) {}
       }
 
-      // 2. Kit Filter
-      if (kitFilter === 'WITH_KIT' && !hasKit) return false
-      if (kitFilter === 'WITHOUT_KIT' && hasKit) return false
+      // 2. Kit Filter (only apply if the event uses kits or any kit was delivered)
+      if (eventHasKit || hasAnyKitDelivered) {
+        if (kitFilter === 'WITH_KIT' && !hasKit) return false
+        if (kitFilter === 'WITHOUT_KIT' && hasKit) return false
+      }
 
       // 3. Search Filter
       if (search.trim()) {
@@ -102,7 +137,7 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
 
       return true
     })
-  }, [registrations, statusFilter, kitFilter, search])
+  }, [registrations, statusFilter, kitFilter, search, eventHasKit, hasAnyKitDelivered])
 
   const [isStandalone, setIsStandalone] = useState(false)
   const [copiedLink, setCopiedLink] = useState(false)
@@ -338,10 +373,7 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
     const participantPhotoData = photoUrl ? imagesMap.get(photoUrl) : null
 
     // Kit check
-    const kitScan = cps.find((c: any) => {
-      const n = (c?.name || '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-      return n.includes('kit') || n.includes('bienvenida')
-    })
+    const kitScan = cps.find((c: any) => isKitName(c?.name))
 
     const hasConsent = addData.q_auth_menores || addData.consentimiento || addData.autorizacion
 
@@ -462,12 +494,14 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
     pdf.setTextColor(isAsistio ? 21 : 29, isAsistio ? 128 : 78, isAsistio ? 61 : 216)
     pdf.text(isAsistio ? '✓ ASISTENCIA' : '⏳ REGISTRADO', textLeft + 17.5, 65.8, { align: 'center' })
 
-    // 2. Badge de Kit
-    pdf.setFillColor(kitScan ? 236 : 255, kitScan ? 253 : 251, kitScan ? 245 : 235)
-    pdf.setDrawColor(kitScan ? 167 : 253, kitScan ? 243 : 230, kitScan ? 208 : 138)
-    pdf.roundedRect(textLeft + 38, 61, 37, 7, 1.8, 1.8, 'FD')
-    pdf.setTextColor(kitScan ? 4 : 180, kitScan ? 120 : 83, kitScan ? 87 : 9)
-    pdf.text(kitScan ? '🎒 KIT ENTREGADO' : '🎒 KIT PENDIENTE', textLeft + 38 + 18.5, 65.8, { align: 'center' })
+    // 2. Badge de Kit (solo si el evento tiene kit o si esta persona ya tiene kit entregado)
+    if (kitScan || eventHasKit) {
+      pdf.setFillColor(kitScan ? 236 : 255, kitScan ? 253 : 251, kitScan ? 245 : 235)
+      pdf.setDrawColor(kitScan ? 167 : 253, kitScan ? 243 : 230, kitScan ? 208 : 138)
+      pdf.roundedRect(textLeft + 38, 61, 37, 7, 1.8, 1.8, 'FD')
+      pdf.setTextColor(kitScan ? 4 : 180, kitScan ? 120 : 83, kitScan ? 87 : 9)
+      pdf.text(kitScan ? '🎒 KIT ENTREGADO' : '🎒 KIT PENDIENTE', textLeft + 38 + 18.5, 65.8, { align: 'center' })
+    }
 
     // Caja de ID de Registro a la derecha
     const idBoxX = marginX + contentW - 36
@@ -1280,58 +1314,60 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
             </button>
           </div>
 
-          {/* Kit Filter Tabs */}
-          <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center' }}>
-            <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#64748B' }}>Kit:</span>
-            <button
-              type="button"
-              onClick={() => setKitFilter('ALL')}
-              style={{
-                padding: '0.3rem 0.6rem',
-                borderRadius: '16px',
-                fontSize: '0.78rem',
-                fontWeight: 700,
-                cursor: 'pointer',
-                border: kitFilter === 'ALL' ? '2px solid #6366F1' : '1px solid #CBD5E1',
-                backgroundColor: kitFilter === 'ALL' ? '#EEF2FF' : '#FFFFFF',
-                color: kitFilter === 'ALL' ? '#4F46E5' : '#475569'
-              }}
-            >
-              Todos
-            </button>
-            <button
-              type="button"
-              onClick={() => setKitFilter('WITH_KIT')}
-              style={{
-                padding: '0.3rem 0.6rem',
-                borderRadius: '16px',
-                fontSize: '0.78rem',
-                fontWeight: 700,
-                cursor: 'pointer',
-                border: kitFilter === 'WITH_KIT' ? '2px solid #059669' : '1px solid #CBD5E1',
-                backgroundColor: kitFilter === 'WITH_KIT' ? '#ECFDF5' : '#FFFFFF',
-                color: kitFilter === 'WITH_KIT' ? '#047857' : '#475569'
-              }}
-            >
-              Con Kit
-            </button>
-            <button
-              type="button"
-              onClick={() => setKitFilter('WITHOUT_KIT')}
-              style={{
-                padding: '0.3rem 0.6rem',
-                borderRadius: '16px',
-                fontSize: '0.78rem',
-                fontWeight: 700,
-                cursor: 'pointer',
-                border: kitFilter === 'WITHOUT_KIT' ? '2px solid #D97706' : '1px solid #CBD5E1',
-                backgroundColor: kitFilter === 'WITHOUT_KIT' ? '#FFFBEB' : '#FFFFFF',
-                color: kitFilter === 'WITHOUT_KIT' ? '#B45309' : '#475569'
-              }}
-            >
-              Sin Kit
-            </button>
-          </div>
+          {/* Kit Filter Tabs (solo si el evento tiene kit o si hay algún kit entregado) */}
+          {(eventHasKit || hasAnyKitDelivered) && (
+            <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center' }}>
+              <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#64748B' }}>Kit:</span>
+              <button
+                type="button"
+                onClick={() => setKitFilter('ALL')}
+                style={{
+                  padding: '0.3rem 0.6rem',
+                  borderRadius: '16px',
+                  fontSize: '0.78rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  border: kitFilter === 'ALL' ? '2px solid #6366F1' : '1px solid #CBD5E1',
+                  backgroundColor: kitFilter === 'ALL' ? '#EEF2FF' : '#FFFFFF',
+                  color: kitFilter === 'ALL' ? '#4F46E5' : '#475569'
+                }}
+              >
+                Todos
+              </button>
+              <button
+                type="button"
+                onClick={() => setKitFilter('WITH_KIT')}
+                style={{
+                  padding: '0.3rem 0.6rem',
+                  borderRadius: '16px',
+                  fontSize: '0.78rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  border: kitFilter === 'WITH_KIT' ? '2px solid #059669' : '1px solid #CBD5E1',
+                  backgroundColor: kitFilter === 'WITH_KIT' ? '#ECFDF5' : '#FFFFFF',
+                  color: kitFilter === 'WITH_KIT' ? '#047857' : '#475569'
+                }}
+              >
+                Con Kit
+              </button>
+              <button
+                type="button"
+                onClick={() => setKitFilter('WITHOUT_KIT')}
+                style={{
+                  padding: '0.3rem 0.6rem',
+                  borderRadius: '16px',
+                  fontSize: '0.78rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  border: kitFilter === 'WITHOUT_KIT' ? '2px solid #D97706' : '1px solid #CBD5E1',
+                  backgroundColor: kitFilter === 'WITHOUT_KIT' ? '#FFFBEB' : '#FFFFFF',
+                  color: kitFilter === 'WITHOUT_KIT' ? '#B45309' : '#475569'
+                }}
+              >
+                Sin Kit
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -1355,7 +1391,7 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
           <p style={{ color: '#64748B', margin: 0, fontSize: '0.85rem' }}>
             Total en este reporte: <strong>{filteredRegistrations.length}</strong> personas
             {statusFilter !== 'ALL' && ` • Filtro: ${statusFilter === 'ASISTIO' ? 'Asistieron' : 'Pendientes'}`}
-            {kitFilter !== 'ALL' && ` • Kit: ${kitFilter === 'WITH_KIT' ? 'Con Kit' : 'Sin Kit'}`}
+            {(eventHasKit || hasAnyKitDelivered) && kitFilter !== 'ALL' && ` • Kit: ${kitFilter === 'WITH_KIT' ? 'Con Kit' : 'Sin Kit'}`}
           </p>
         </div>
 
@@ -1369,7 +1405,7 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
             <p style={{ color: '#64748B', fontSize: '0.85rem', margin: 0 }}>
               Prueba cambiando los filtros de estado o la búsqueda.
             </p>
-            {(search || statusFilter !== 'ALL' || kitFilter !== 'ALL') && (
+            {(search || statusFilter !== 'ALL' || ((eventHasKit || hasAnyKitDelivered) && kitFilter !== 'ALL')) && (
               <button
                 type="button"
                 onClick={() => { setSearch(''); setStatusFilter('ALL'); setKitFilter('ALL') }}
@@ -1408,10 +1444,7 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
             }
 
             // Kit logic
-            const kitScan = cps.find((c: any) => {
-              const n = (c?.name || '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-              return n.includes('kit') || n.includes('bienvenida')
-            })
+            const kitScan = cps.find((c: any) => isKitName(c?.name))
 
             const fullName = [p.firstName, p.middleName, p.lastName, p.secondLastName].filter(Boolean).join(' ')
 
@@ -1465,7 +1498,7 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
                           }}>
                             🎒 KIT ENTREGADO
                           </span>
-                        ) : (
+                        ) : eventHasKit ? (
                           <span style={{
                             fontSize: '0.7rem',
                             fontWeight: 700,
@@ -1477,7 +1510,7 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
                           }}>
                             🎒 KIT PENDIENTE
                           </span>
-                        )}
+                        ) : null}
                       </div>
                     </div>
                   </div>
