@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
-import { Users, UserCheck, QrCode, Printer, ExternalLink } from 'lucide-react'
+import { Users, UserCheck, QrCode, Printer, ExternalLink, RefreshCw } from 'lucide-react'
 import CopyLink from './CopyLink'
 
 interface EventMetricsCardsProps {
@@ -24,7 +24,49 @@ export default function EventMetricsCards({
   const [attended, setAttended] = useState(initialAttended)
   const [pending, setPending] = useState(initialPending)
   const [checkpoints, setCheckpoints] = useState<Record<string, number>>(initialCheckpoints)
+  const [isRefreshing, setIsRefreshing] = useState(false)
 
+  // Sync state if props change from server
+  useEffect(() => {
+    setTotal(initialTotal)
+    setAttended(initialAttended)
+    setPending(initialPending)
+    setCheckpoints(initialCheckpoints)
+  }, [initialTotal, initialAttended, initialPending, initialCheckpoints])
+
+  // Direct live fetch from API
+  const fetchLatestStats = async (showLoading = false) => {
+    if (showLoading) setIsRefreshing(true)
+    try {
+      const res = await fetch(`/api/events/${eventId}/registrations?t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' }
+      })
+      if (!res.ok) return
+      const data = await res.json()
+      if (data.stats) {
+        if (typeof data.stats.totalCount === 'number') setTotal(data.stats.totalCount)
+        if (typeof data.stats.attendedCount === 'number') setAttended(data.stats.attendedCount)
+        if (typeof data.stats.pendingCount === 'number') setPending(data.stats.pendingCount)
+        if (data.stats.checkpointStats) setCheckpoints(data.stats.checkpointStats)
+      }
+    } catch (e) {
+      console.error('Error fetching live event metrics:', e)
+    } finally {
+      if (showLoading) setIsRefreshing(false)
+    }
+  }
+
+  // Fetch immediately on mount & poll every 3.5 seconds
+  useEffect(() => {
+    fetchLatestStats(false)
+    const interval = setInterval(() => {
+      fetchLatestStats(false)
+    }, 3500)
+    return () => clearInterval(interval)
+  }, [eventId])
+
+  // Listen for real-time broadcasts from table actions
   useEffect(() => {
     const handleSync = (e: any) => {
       const stats = e.detail
@@ -69,7 +111,33 @@ export default function EventMetricsCards({
         
         {Object.keys(checkpoints).length > 0 && (
           <div style={{ marginTop: '0.5rem', borderTop: '1px solid #E2E8F0', paddingTop: '0.5rem', maxHeight: '130px', overflowY: 'auto' }}>
-            <h4 style={{ fontSize: '0.7rem', fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase', marginBottom: '0.35rem' }}>Entregas Realizadas:</h4>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
+              <h4 style={{ fontSize: '0.7rem', fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase', margin: 0 }}>
+                Entregas Realizadas:
+              </h4>
+              <button
+                type="button"
+                onClick={() => fetchLatestStats(true)}
+                title="Actualizar números de entregas ahora"
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  color: '#2563EB',
+                  fontSize: '0.7rem',
+                  fontWeight: 700,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.2rem',
+                  padding: '0.1rem 0.35rem',
+                  borderRadius: '4px',
+                  backgroundColor: '#EFF6FF'
+                }}
+              >
+                <RefreshCw size={11} className={isRefreshing ? 'animate-spin' : ''} />
+                <span>{isRefreshing ? 'Actualizando...' : 'Actualizar'}</span>
+              </button>
+            </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
               {Object.entries(checkpoints).map(([name, count]) => (
                 <span key={name} style={{ fontSize: '0.75rem', backgroundColor: '#F1F5F9', padding: '0.2rem 0.5rem', borderRadius: '4px', color: '#334155', fontWeight: 600 }}>

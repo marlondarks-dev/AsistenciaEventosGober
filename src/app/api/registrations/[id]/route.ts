@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 import { revalidatePath } from 'next/cache'
 import prisma from '@/lib/prisma'
 
+
+
 export async function DELETE(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
