@@ -55,6 +55,127 @@ function formatColombiaDateTime(dateInput: Date | string | null | undefined): st
   }
 }
 
+function normalizeText(str: string): string {
+  return (str || '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim()
+}
+
+function getConfiguredCheckpointsList(event: any): string[] {
+  if (!event?.requiredFields) return []
+  try {
+    const parsed = typeof event.requiredFields === 'string' 
+      ? JSON.parse(event.requiredFields) 
+      : event.requiredFields
+    const list: string[] = []
+    if (Array.isArray(parsed.checkpoints) && parsed.checkpoints.length > 0) {
+      list.push(...parsed.checkpoints)
+    } else if (parsed.dailySchedule?.days) {
+      if (Array.isArray(parsed.dailySchedule.generalPoints)) {
+        list.push(...parsed.dailySchedule.generalPoints)
+      }
+      for (const d of parsed.dailySchedule.days) {
+        if (Array.isArray(d.meals)) {
+          for (const m of d.meals) {
+            list.push(`${d.day} - ${m}`)
+          }
+        }
+      }
+    }
+    return list
+  } catch {
+    return []
+  }
+}
+
+function getCheckpointSortRank(cp: any, configuredList: string[] = []): number {
+  const rawName = (cp?.name || '').trim()
+  const name = normalizeText(rawName)
+
+  // 1. Ingreso general (siempre de primero en toda la ficha)
+  if (name === 'ingreso' || name.startsWith('ingreso general') || name === 'registro de ingreso' || name.startsWith('puerta')) {
+    return -1000000
+  }
+
+  // 2. Kit de Bienvenida (siempre justo después de ingreso)
+  if (name.includes('kit') || name.includes('bienvenida')) {
+    return -900000
+  }
+
+  // 3. Si coincide con la lista configurada del evento (orden oficial programado para el evento)
+  if (configuredList && configuredList.length > 0) {
+    const idx = configuredList.findIndex(c => {
+      const cNorm = normalizeText(c)
+      return cNorm === name || name === cNorm || name.includes(cNorm) || cNorm.includes(name)
+    })
+    if (idx !== -1) {
+      return -500000 + (idx * 1000)
+    }
+  }
+
+  // 4. Extracción de Día de la semana (Lunes=1, Martes=2, Miércoles=3, Jueves=4, Viernes=5, Sábado=6, Domingo=7)
+  let weekdayOrder = 0
+  if (name.includes('lunes')) weekdayOrder = 1
+  else if (name.includes('martes')) weekdayOrder = 2
+  else if (name.includes('miercoles')) weekdayOrder = 3
+  else if (name.includes('jueves')) weekdayOrder = 4
+  else if (name.includes('viernes')) weekdayOrder = 5
+  else if (name.includes('sabado')) weekdayOrder = 6
+  else if (name.includes('domingo')) weekdayOrder = 7
+
+  // Si tiene "Dia 1", "Dia 2", etc.
+  const diaMatch = name.match(/dia\s*(\d+)/i)
+  if (diaMatch && diaMatch[1]) {
+    weekdayOrder = parseInt(diaMatch[1], 10)
+  }
+
+  // Si tiene número de calendario (ej. "21", "22", "23" en "Miércoles 21" o "21 de Octubre")
+  const calMatch = name.match(/(?:lunes|martes|miercoles|jueves|viernes|sabado|domingo)\s*(\d+)/i) || 
+                   name.match(/\b(\d{1,2})\s*(?:de|-)\b/i)
+  let calDay = 0
+  if (calMatch && calMatch[1]) {
+    calDay = parseInt(calMatch[1], 10)
+  }
+
+  // Ponderación del día cronológico
+  let dayScore = 0
+  if (calDay > 0) {
+    dayScore = calDay * 10000
+  } else if (weekdayOrder > 0) {
+    dayScore = weekdayOrder * 10000
+  }
+
+  // 5. Extracción de comida / momento cronológico dentro del día
+  let mealScore = 500
+  if (name.includes('ingreso')) mealScore = 0
+  else if (name.includes('desayuno')) mealScore = 100
+  else if (name.includes('manana') || name.includes('am') || name.includes('refrigerio 1') || name.includes('media manana')) mealScore = 200
+  else if (name.includes('almuerzo')) mealScore = 300
+  else if (name.includes('tarde') || name.includes('pm') || name.includes('refrigerio 2')) mealScore = 400
+  else if (name.includes('cena')) mealScore = 500
+  else if (name.includes('noche') || name.includes('refrigerio 3') || name.includes('clausura') || name.includes('brindis')) mealScore = 600
+  else if (name.includes('refrigerio')) mealScore = 250 // refrigerio estándar
+
+  // Si no se detectó día por texto, pero tiene timestamp con fecha válida:
+  if (dayScore === 0 && cp.timestamp) {
+    const d = new Date(cp.timestamp)
+    if (!isNaN(d.getTime())) {
+      return 100000 + (d.getTime() / 10000000)
+    }
+  }
+
+  return dayScore + mealScore
+}
+
+function sortCheckpointsChronologically(cps: any[], configuredList: string[] = []): any[] {
+  return [...cps].sort((a, b) => {
+    const rankA = getCheckpointSortRank(a, configuredList)
+    const rankB = getCheckpointSortRank(b, configuredList)
+    if (rankA !== rankB) return rankA - rankB
+    const tA = a.timestamp ? new Date(a.timestamp).getTime() : 0
+    const tB = b.timestamp ? new Date(b.timestamp).getTime() : 0
+    return tA - tB
+  })
+}
+
 export default function ReportViewerClient({ event, registrations }: ReportViewerProps) {
   const searchParams = useSearchParams()
   const initialSearch = searchParams.get('search') || ''
@@ -67,6 +188,9 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
   const [kitFilter, setKitFilter] = useState<'ALL' | 'WITH_KIT' | 'WITHOUT_KIT'>('ALL')
   const [onePerPage, setOnePerPage] = useState(false)
   const [isPrinting, setIsPrinting] = useState(false)
+
+  // Configured checkpoints list for chronological ordering
+  const configuredCheckpointsList = useMemo(() => getConfiguredCheckpointsList(event), [event?.requiredFields])
 
   // Determine if this event has kits configured
   const eventHasKit = useMemo(() => {
@@ -346,20 +470,18 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
     const docText = `${p.documentType || 'DOC'} ${p.documentNumber || 'Sin documento'}`
     const regId = (reg.id || '').slice(-8).toUpperCase()
 
+    const configuredList = getConfiguredCheckpointsList(currentEvent)
+
     // Parse checkpoints
-    const cps: any[] = []
+    const rawCps: any[] = []
     if (reg.checkpoints) {
       try {
         const parsed = JSON.parse(reg.checkpoints)
-        if (Array.isArray(parsed)) cps.push(...parsed)
+        if (Array.isArray(parsed)) rawCps.push(...parsed)
       } catch {}
     }
-    // Ordenar cronológicamente para que Ingreso, Jueves, Viernes, Sábado salgan en orden exacto
-    cps.sort((a, b) => {
-      const tA = a.timestamp ? new Date(a.timestamp).getTime() : 0
-      const tB = b.timestamp ? new Date(b.timestamp).getTime() : 0
-      return tA - tB
-    })
+    // Ordenar cronológicamente por fecha (Ingreso -> Miércoles -> Jueves -> Viernes)
+    const cps = sortCheckpointsChronologically(rawCps, configuredList)
 
     // Parse additionalData
     let addData: Record<string, any> = {}
@@ -1572,19 +1694,15 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
           /* Cards List */
           filteredRegistrations.map((reg) => {
             const p = reg.person || {}
-            const cps: any[] = []
+            const rawCps: any[] = []
             if (reg.checkpoints) {
               try {
                 const parsed = JSON.parse(reg.checkpoints)
-                if (Array.isArray(parsed)) cps.push(...parsed)
+                if (Array.isArray(parsed)) rawCps.push(...parsed)
               } catch (e) {}
             }
-            // Ordenar cronológicamente
-            cps.sort((a: any, b: any) => {
-              const tA = a.timestamp ? new Date(a.timestamp).getTime() : 0
-              const tB = b.timestamp ? new Date(b.timestamp).getTime() : 0
-              return tA - tB
-            })
+            // Ordenar por fecha cronológica (Ingreso -> Miércoles -> Jueves -> Viernes)
+            const cps = sortCheckpointsChronologically(rawCps, configuredCheckpointsList)
 
             let addData: Record<string, any> = {}
             if (p.additionalData) {

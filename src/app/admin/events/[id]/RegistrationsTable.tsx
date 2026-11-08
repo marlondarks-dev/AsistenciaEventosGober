@@ -65,6 +65,92 @@ export const isKitName = (name: string): boolean => {
   return lower.includes('kit') || lower.includes('bienvenida')
 }
 
+export function getCheckpointSortRank(cp: any, configuredList: string[] = []): number {
+  const rawName = (cp?.name || '').trim()
+  const name = rawName.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim()
+
+  // 1. Ingreso general (siempre de primero)
+  if (name === 'ingreso' || name.startsWith('ingreso general') || name === 'registro de ingreso' || name.startsWith('puerta')) {
+    return -1000000
+  }
+
+  // 2. Kit de Bienvenida (siempre de segundo)
+  if (name.includes('kit') || name.includes('bienvenida')) {
+    return -900000
+  }
+
+  // 3. Coincidencia con lista configurada
+  if (configuredList && configuredList.length > 0) {
+    const idx = configuredList.findIndex(c => {
+      const cNorm = (c || '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim()
+      return cNorm === name || name === cNorm || name.includes(cNorm) || cNorm.includes(name)
+    })
+    if (idx !== -1) {
+      return -500000 + (idx * 1000)
+    }
+  }
+
+  // 4. Extracción de Día de la semana (Lunes=1, Martes=2, Miércoles=3, Jueves=4, Viernes=5, Sábado=6, Domingo=7)
+  let weekdayOrder = 0
+  if (name.includes('lunes')) weekdayOrder = 1
+  else if (name.includes('martes')) weekdayOrder = 2
+  else if (name.includes('miercoles')) weekdayOrder = 3
+  else if (name.includes('jueves')) weekdayOrder = 4
+  else if (name.includes('viernes')) weekdayOrder = 5
+  else if (name.includes('sabado')) weekdayOrder = 6
+  else if (name.includes('domingo')) weekdayOrder = 7
+
+  const diaMatch = name.match(/dia\s*(\d+)/i)
+  if (diaMatch && diaMatch[1]) {
+    weekdayOrder = parseInt(diaMatch[1], 10)
+  }
+
+  const calMatch = name.match(/(?:lunes|martes|miercoles|jueves|viernes|sabado|domingo)\s*(\d+)/i) || 
+                   name.match(/\b(\d{1,2})\s*(?:de|-)\b/i)
+  let calDay = 0
+  if (calMatch && calMatch[1]) {
+    calDay = parseInt(calMatch[1], 10)
+  }
+
+  let dayScore = 0
+  if (calDay > 0) {
+    dayScore = calDay * 10000
+  } else if (weekdayOrder > 0) {
+    dayScore = weekdayOrder * 10000
+  }
+
+  // 5. Extracción de comida / momento del día
+  let mealScore = 500
+  if (name.includes('ingreso')) mealScore = 0
+  else if (name.includes('desayuno')) mealScore = 100
+  else if (name.includes('manana') || name.includes('am') || name.includes('refrigerio 1') || name.includes('media manana')) mealScore = 200
+  else if (name.includes('almuerzo')) mealScore = 300
+  else if (name.includes('tarde') || name.includes('pm') || name.includes('refrigerio 2')) mealScore = 400
+  else if (name.includes('cena')) mealScore = 500
+  else if (name.includes('noche') || name.includes('refrigerio 3') || name.includes('clausura') || name.includes('brindis')) mealScore = 600
+  else if (name.includes('refrigerio')) mealScore = 250
+
+  if (dayScore === 0 && cp.timestamp) {
+    const d = new Date(cp.timestamp)
+    if (!isNaN(d.getTime())) {
+      return 100000 + (d.getTime() / 10000000)
+    }
+  }
+
+  return dayScore + mealScore
+}
+
+export function sortCheckpointsChronologically(cps: any[], configuredList: string[] = []): any[] {
+  return [...cps].sort((a, b) => {
+    const rankA = getCheckpointSortRank(a, configuredList)
+    const rankB = getCheckpointSortRank(b, configuredList)
+    if (rankA !== rankB) return rankA - rankB
+    const tA = a.timestamp ? new Date(a.timestamp).getTime() : 0
+    const tB = b.timestamp ? new Date(b.timestamp).getTime() : 0
+    return tA - tB
+  })
+}
+
 export default function RegistrationsTable({ 
   eventId, 
   initialRegistrations,
@@ -2700,7 +2786,10 @@ export default function RegistrationsTable({
         let photoUrl = addData.fotoIngreso || addData.foto || null
         let cps: any[] = []
         try {
-          cps = JSON.parse(viewingReg.checkpoints || '[]')
+          const rawParsed = JSON.parse(viewingReg.checkpoints || '[]')
+          if (Array.isArray(rawParsed)) {
+            cps = sortCheckpointsChronologically(rawParsed, eventCheckpoints)
+          }
           if (!photoUrl) {
             const ingresoCp = cps.find((c: any) => c.name === 'Ingreso' && c.evidenceUrl)
             if (ingresoCp) photoUrl = ingresoCp.evidenceUrl
