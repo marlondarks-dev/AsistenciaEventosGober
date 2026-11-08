@@ -809,13 +809,11 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
       }
       drawFooter()
     } else {
-      // Más de 5 entregas: 2 columnas ejecutivas para mostrar absolutamente todos los refrigerios sin omitir ninguno
+      // Más de 5 entregas: 2 columnas ejecutivas organizadas verticalmente (Columna 1 primero de arriba a abajo, luego Columna 2 de arriba a abajo)
       const colGap = 4
       const colW = (contentW - colGap) / 2 // ~91.95 mm
       const cardH = 18
       const rowStep = 20.5
-      let colIndex = 0
-      let rowStartY = currentY
 
       const drawHeaderContinuation = () => {
         // Franja superior
@@ -863,26 +861,11 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
         pdf.text('PUNTOS DE CONTROL Y ENTREGAS ADICIONALES', marginX, 44)
         pdf.setDrawColor(226, 232, 240)
         pdf.line(marginX, 45.5, marginX + contentW, 45.5)
-
-        rowStartY = 48
-        colIndex = 0
       }
 
       drawFooter()
 
-      for (let k = 0; k < cps.length; k++) {
-        const cp = cps[k]
-
-        // Si sobrepasa el límite inferior de la página actual, agregar página
-        if (rowStartY + cardH > 263) {
-          pdf.addPage()
-          drawHeaderContinuation()
-          drawFooter()
-        }
-
-        const boxX = marginX + colIndex * (colW + colGap)
-        const boxY = rowStartY
-
+      const drawCheckpointCard = (cp: any, boxX: number, boxY: number) => {
         pdf.setFillColor(255, 255, 255)
         pdf.setDrawColor(203, 213, 225)
         pdf.roundedRect(boxX, boxY, colW, cardH, 2, 2, 'FD')
@@ -943,13 +926,51 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
           pdf.setTextColor(148, 163, 184)
           pdf.text('Sin foto', imgX + imgW / 2, imgY + 8, { align: 'center' })
         }
+      }
 
-        // Alternar columnas
-        if (colIndex === 0) {
-          colIndex = 1
-        } else {
-          colIndex = 0
-          rowStartY += rowStep
+      // Distribución vertical en 2 columnas en Página 1 (hasta 12 entregas = 6 filas)
+      const maxPage1 = 12
+      const p1Items = cps.slice(0, maxPage1)
+      const p1Rows = Math.ceil(p1Items.length / 2)
+
+      for (let r = 0; r < p1Rows; r++) {
+        const boxY = currentY + r * rowStep
+        // Tarjeta columna 1 (izquierda - primera mitad cronológica)
+        const leftCp = p1Items[r]
+        if (leftCp) {
+          drawCheckpointCard(leftCp, marginX, boxY)
+        }
+        // Tarjeta columna 2 (derecha - segunda mitad cronológica)
+        const rightIdx = r + p1Rows
+        if (rightIdx < p1Items.length) {
+          drawCheckpointCard(p1Items[rightIdx], marginX + colW + colGap, boxY)
+        }
+      }
+
+      // Si sobrepasa 12 entregas, distribuir las restantes en página(s) de continuación
+      if (cps.length > maxPage1) {
+        let remaining = cps.slice(maxPage1)
+        const maxPerPage = 20 // 10 filas por página
+        while (remaining.length > 0) {
+          pdf.addPage()
+          drawHeaderContinuation()
+          drawFooter()
+
+          const curBatch = remaining.slice(0, maxPerPage)
+          remaining = remaining.slice(maxPerPage)
+          const curRows = Math.ceil(curBatch.length / 2)
+
+          for (let r = 0; r < curRows; r++) {
+            const boxY = 48 + r * rowStep
+            const leftCp = curBatch[r]
+            if (leftCp) {
+              drawCheckpointCard(leftCp, marginX, boxY)
+            }
+            const rightIdx = r + curRows
+            if (rightIdx < curBatch.length) {
+              drawCheckpointCard(curBatch[rightIdx], marginX + colW + colGap, boxY)
+            }
+          }
         }
       }
     }
@@ -1944,43 +1965,64 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
                   <p style={{ color: '#94A3B8', fontSize: '0.85rem', margin: '0.5rem 0 0', fontStyle: 'italic' }}>
                     No hay puntos de control registrados aún para este participante.
                   </p>
-                ) : (
-                  <div className="checkpoints-container">
-                    {cps.map((cp: any, index: number) => (
-                      <div key={index} className="checkpoint-card">
-                        <div className="checkpoint-details">
-                          <div className="checkpoint-name">
-                            <CheckCircle2 size={16} color="#16A34A" />
-                            <span>{cp.name}</span>
-                          </div>
-                          <div className="checkpoint-time">
-                            Fecha/Hora: {formatColombiaDateTime(cp.timestamp)}
-                            {cp.attendedBy && (
-                              <span style={{ marginLeft: '0.4rem', color: '#2563EB', fontWeight: 600 }}>
-                                • Entregado por: {cp.attendedBy}
-                              </span>
-                            )}
-                          </div>
+                ) : (() => {
+                  const renderItem = (cp: any, index: number) => (
+                    <div key={index} className="checkpoint-card">
+                      <div className="checkpoint-details">
+                        <div className="checkpoint-name">
+                          <CheckCircle2 size={16} color="#16A34A" />
+                          <span>{cp.name}</span>
                         </div>
-                        {cp.evidenceUrl ? (
-                          <div>
-                            <img 
-                              src={cp.evidenceUrl} 
-                              alt="Evidencia" 
-                              className="evidence-img"
-                              onError={(e: any) => { e.target.style.display = 'none' }}
-                            />
-                          </div>
-                        ) : (
-                          <div style={{ width: '60px', height: '60px', backgroundColor: '#F8FAFC', border: '1px dashed #CBD5E1', borderRadius: '6px', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', color: '#94A3B8' }}>
-                            <Camera size={18} style={{ opacity: 0.5 }} />
-                            <span style={{ fontSize: '0.55rem', marginTop: '0.2rem' }}>Sin foto</span>
-                          </div>
-                        )}
+                        <div className="checkpoint-time">
+                          Fecha/Hora: {formatColombiaDateTime(cp.timestamp)}
+                          {cp.attendedBy && (
+                            <span style={{ marginLeft: '0.4rem', color: '#2563EB', fontWeight: 600 }}>
+                              • Entregado por: {cp.attendedBy}
+                            </span>
+                          )}
+                        </div>
                       </div>
-                    ))}
-                  </div>
-                )}
+                      {cp.evidenceUrl ? (
+                        <div>
+                          <img 
+                            src={cp.evidenceUrl} 
+                            alt="Evidencia" 
+                            className="evidence-img"
+                            onError={(e: any) => { e.target.style.display = 'none' }}
+                          />
+                        </div>
+                      ) : (
+                        <div style={{ width: '60px', height: '60px', backgroundColor: '#F8FAFC', border: '1px dashed #CBD5E1', borderRadius: '6px', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', color: '#94A3B8', flexShrink: 0 }}>
+                          <Camera size={18} style={{ opacity: 0.5 }} />
+                          <span style={{ fontSize: '0.55rem', marginTop: '0.2rem' }}>Sin foto</span>
+                        </div>
+                      )}
+                    </div>
+                  )
+
+                  if (cps.length <= 5) {
+                    return (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+                        {cps.map((cp: any, idx: number) => renderItem(cp, idx))}
+                      </div>
+                    )
+                  }
+
+                  const half = Math.ceil(cps.length / 2)
+                  const col1 = cps.slice(0, half)
+                  const col2 = cps.slice(half)
+
+                  return (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '0.65rem' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+                        {col1.map((cp: any, idx: number) => renderItem(cp, idx))}
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+                        {col2.map((cp: any, idx: number) => renderItem(cp, idx + half))}
+                      </div>
+                    </div>
+                  )
+                })()}
               </div>
             )
           })
