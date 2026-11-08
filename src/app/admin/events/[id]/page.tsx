@@ -206,7 +206,7 @@ export default async function EventDetailPage({ params }: { params: Promise<{ id
           
           {event.registrations.length > 0 && (
             <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-              <Link href={`/admin/events/${event.id}/report`} target="_blank" className="btn btn-outline" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', backgroundColor: '#EFF6FF', borderColor: '#BFDBFE', color: '#1D4ED8', fontSize: '0.85rem', padding: '0.5rem 0.85rem', fontWeight: 700 }}>
+              <Link href={`/admin/events/${event.id}/report`} prefetch={false} target="_blank" className="btn btn-outline" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', backgroundColor: '#EFF6FF', borderColor: '#BFDBFE', color: '#1D4ED8', fontSize: '0.85rem', padding: '0.5rem 0.85rem', fontWeight: 700 }}>
                 <FileSpreadsheet size={16} />
                 Generar Fichas (PDF)
               </Link>

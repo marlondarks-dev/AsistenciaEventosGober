@@ -22,7 +22,8 @@ import {
   Copy,
   Check,
   Download,
-  Loader2
+  Loader2,
+  RotateCw
 } from 'lucide-react'
 
 interface ReportViewerProps {
@@ -1381,6 +1382,30 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
             </button>
 
             {/* Secondary Action: Print via Browser */}
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              disabled={isGeneratingPdf}
+              className="btn btn-outline"
+              title="Recargar la información más reciente desde la base de datos"
+              style={{
+                backgroundColor: '#FFFFFF',
+                color: '#475569',
+                borderColor: '#CBD5E1',
+                padding: '0.55rem 0.85rem',
+                borderRadius: '8px',
+                fontWeight: 600,
+                fontSize: '0.85rem',
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.4rem'
+              }}
+            >
+              <RotateCw size={15} />
+              <span>Actualizar Datos</span>
+            </button>
+
             <button
               type="button"
               onClick={handlePrint}

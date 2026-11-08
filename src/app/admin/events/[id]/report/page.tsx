@@ -1,4 +1,5 @@
 import { Suspense } from 'react'
+import { headers } from 'next/headers'
 import prisma from '@/lib/prisma'
 import { redirect } from 'next/navigation'
 import ReportViewerClient from './ReportViewerClient'
@@ -6,6 +7,7 @@ import ReportViewerClient from './ReportViewerClient'
 export const instant = false
 
 export default async function EventReportPage({ params }: { params: Promise<{ id: string }> }) {
+  await headers()
   const { id } = await params
   
   const event = await prisma.event.findUnique({

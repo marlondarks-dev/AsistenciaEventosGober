@@ -1601,6 +1601,7 @@ export default function RegistrationsTable({
           <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', alignItems: 'center' }}>
             <Link
               href={`/admin/events/${eventId}/report`}
+              prefetch={false}
               target="_blank"
               className="btn btn-outline"
               style={{
