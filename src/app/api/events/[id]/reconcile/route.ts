@@ -50,6 +50,28 @@ export async function GET(
       hasKitConfigured = configuredCheckpoints.some(c => isKitName(c))
     } catch (e) {}
 
+    // Discover any checkpoints present across registrations
+    event.registrations.forEach(r => {
+      if (!r.checkpoints) return
+      try {
+        const cps = typeof r.checkpoints === 'string' ? JSON.parse(r.checkpoints) : r.checkpoints
+        if (Array.isArray(cps)) {
+          cps.forEach((c: any) => {
+            if (c?.name && typeof c.name === 'string') {
+              const trimmed = c.name.trim()
+              if (trimmed) {
+                if (isKitName(trimmed)) {
+                  if (hasKitConfigured && !configuredCheckpoints.includes(trimmed)) configuredCheckpoints.push(trimmed)
+                } else if (!configuredCheckpoints.includes(trimmed)) {
+                  configuredCheckpoints.push(trimmed)
+                }
+              }
+            }
+          })
+        }
+      } catch {}
+    })
+
     const totalCount = event.registrations.length
     const attendedCount = event.registrations.filter(r => r.status === 'ASISTIO').length
     const pendingCount = event.registrations.filter(r => r.status === 'REGISTRADO').length

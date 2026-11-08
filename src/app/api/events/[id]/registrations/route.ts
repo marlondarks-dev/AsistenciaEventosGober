@@ -51,7 +51,7 @@ export async function GET(
     try {
       const parsedConfig = event.requiredFields ? JSON.parse(event.requiredFields) : {}
       if (Array.isArray(parsedConfig.checkpoints) && parsedConfig.checkpoints.length > 0) {
-        configuredCheckpoints = parsedConfig.checkpoints
+        configuredCheckpoints = [...parsedConfig.checkpoints]
       } else if (parsedConfig.hasKit !== false) {
         configuredCheckpoints = ['Ingreso', 'Kit de Bienvenida']
       }
@@ -60,6 +60,28 @@ export async function GET(
       }
       hasKitConfigured = configuredCheckpoints.some(c => isKit(c))
     } catch (e) {}
+
+    // Discover any checkpoints present across registrations so live metrics and tables never lose them
+    event.registrations.forEach(r => {
+      if (!r.checkpoints) return
+      try {
+        const cps = typeof r.checkpoints === 'string' ? JSON.parse(r.checkpoints) : r.checkpoints
+        if (Array.isArray(cps)) {
+          cps.forEach((c: any) => {
+            if (c?.name && typeof c.name === 'string') {
+              const trimmed = c.name.trim()
+              if (trimmed) {
+                if (isKit(trimmed)) {
+                  if (hasKitConfigured && !configuredCheckpoints.includes(trimmed)) configuredCheckpoints.push(trimmed)
+                } else if (!configuredCheckpoints.includes(trimmed)) {
+                  configuredCheckpoints.push(trimmed)
+                }
+              }
+            }
+          })
+        }
+      } catch {}
+    })
 
     const checkpointStats: Record<string, number> = {}
     configuredCheckpoints.forEach(cpName => {

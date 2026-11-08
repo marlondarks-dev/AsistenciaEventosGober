@@ -108,7 +108,7 @@ export default function RegistrationsTable({
     try {
       const parsed = eventRequiredFields ? JSON.parse(eventRequiredFields) : {}
       let cps: string[] = Array.isArray(parsed.checkpoints) && parsed.checkpoints.length > 0 
-        ? parsed.checkpoints 
+        ? [...parsed.checkpoints] 
         : ['Ingreso']
       
       const hasKitBool = parsed.hasKit === true 
@@ -120,6 +120,28 @@ export default function RegistrationsTable({
       if (parsed.hasKit === false) {
         cps = cps.filter(c => !isKitName(c))
       }
+
+      // Also discover any checkpoints present across registrations so live tables never lose them
+      registrations.forEach(r => {
+        if (!r.checkpoints) return
+        try {
+          const rCps = typeof r.checkpoints === 'string' ? JSON.parse(r.checkpoints) : r.checkpoints
+          if (Array.isArray(rCps)) {
+            rCps.forEach((c: any) => {
+              if (c?.name && typeof c.name === 'string') {
+                const trimmed = c.name.trim()
+                if (trimmed) {
+                  if (isKitName(trimmed)) {
+                    if (hasKitBool && !cps.includes(trimmed)) cps.push(trimmed)
+                  } else if (!cps.includes(trimmed)) {
+                    cps.push(trimmed)
+                  }
+                }
+              }
+            })
+          }
+        } catch {}
+      })
       
       const dailySched = parsed.dailySchedule || null
       
@@ -167,7 +189,7 @@ export default function RegistrationsTable({
         eventHasKit: false
       }
     }
-  }, [eventRequiredFields])
+  }, [eventRequiredFields, registrations])
   
   // Upload states inside modal
   const [uploadingModalPhoto, setUploadingModalPhoto] = useState(false)
@@ -3396,8 +3418,19 @@ export default function RegistrationsTable({
           return '📍'
         }
 
+        // Participant non-kit deliveries
+        const participantNonKitCps = cps.filter((c: any) => c && c.name && !isKitName(c.name))
+        
+        // All non-kit checkpoints to show in the modal (both configured and delivered to this person)
+        const allModalCheckpoints = Array.from(
+          new Set([
+            ...eventCheckpoints.filter((cp: string) => !isKitName(cp)),
+            ...participantNonKitCps.map((c: any) => c.name)
+          ])
+        )
+
         // Calculate progress
-        const totalPossible = eventCheckpoints.length
+        const totalPossible = Math.max(allModalCheckpoints.length + (eventHasKit || hasKitVal ? 1 : 0), cps.length)
         const totalDelivered = cps.length
 
         return (
@@ -3782,11 +3815,134 @@ export default function RegistrationsTable({
                         </div>
                       )
                     })}
+
+                    {/* Entregas adicionales fuera de cronograma diario si las hay */}
+                    {(() => {
+                      const extraCps = participantNonKitCps.filter((c: any) => {
+                        return !eventDaysList.some((d: any) => d.meals.some((m: string) => c.name === `${d.day} - ${m}` || c.name === m))
+                      })
+                      if (extraCps.length === 0) return null
+                      return (
+                        <div style={{
+                          backgroundColor: '#FFFFFF',
+                          borderRadius: '12px',
+                          border: '1px solid #E2E8F0',
+                          padding: '1rem',
+                          boxShadow: '0 1px 3px rgba(0,0,0,0.03)'
+                        }}>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem', borderBottom: '1px solid #F1F5F9', paddingBottom: '0.5rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                              <span style={{ fontSize: '1.1rem' }}>📍</span>
+                              <h4 style={{ margin: 0, fontSize: '0.92rem', fontWeight: 800, color: '#0F172A' }}>
+                                Entregas Adicionales Registradas
+                              </h4>
+                            </div>
+                            <span style={{ fontSize: '0.72rem', color: '#166534', fontWeight: 700 }}>
+                              {extraCps.length} registradas
+                            </span>
+                          </div>
+
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: '0.65rem' }}>
+                            {extraCps.map((extraCp: any, extraIdx: number) => {
+                              const existingIdx = cps.findIndex((c: any) => c === extraCp || (c.name === extraCp.name && c.timestamp === extraCp.timestamp))
+                              return (
+                                <div key={extraIdx} style={{
+                                  backgroundColor: '#F0FDF4',
+                                  borderRadius: '10px',
+                                  border: '1.5px solid #86EFAC',
+                                  padding: '0.75rem 0.85rem',
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  justifyContent: 'space-between',
+                                  gap: '0.5rem'
+                                }}>
+                                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.4rem' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                      <span style={{ fontSize: '1.2rem' }}>{getMealIcon(extraCp.name)}</span>
+                                      <div>
+                                        <div style={{ fontSize: '0.82rem', fontWeight: 800, color: '#166534' }}>
+                                          {extraCp.name}
+                                        </div>
+                                      </div>
+                                    </div>
+                                    <span style={{
+                                      fontSize: '0.68rem',
+                                      fontWeight: 800,
+                                      padding: '0.1rem 0.4rem',
+                                      borderRadius: '8px',
+                                      backgroundColor: '#DCFCE7',
+                                      color: '#15803D',
+                                      border: '1px solid #BBF7D0'
+                                    }}>
+                                      ✅ Listo
+                                    </span>
+                                  </div>
+
+                                  <div style={{ borderTop: '1px dashed #BBF7D0', paddingTop: '0.4rem' }}>
+                                    <div style={{ fontSize: '0.7rem', color: '#166534', fontWeight: 600 }}>
+                                      {new Date(extraCp.timestamp).toLocaleDateString('es-CO', { timeZone: 'America/Bogota', weekday: 'short', day: 'numeric', month: 'short' })} • {new Date(extraCp.timestamp).toLocaleTimeString('es-CO', { timeZone: 'America/Bogota', hour: '2-digit', minute: '2-digit', hour12: true })}
+                                    </div>
+                                    {extraCp.attendedBy && (
+                                      <div style={{ fontSize: '0.65rem', color: '#64748B', marginTop: '0.1rem' }}>
+                                        Por: {extraCp.attendedBy}
+                                      </div>
+                                    )}
+
+                                    <div style={{ display: 'flex', gap: '0.35rem', marginTop: '0.4rem' }}>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleOpenEditCheckpointDateTime(managingCheckpointsReg, existingIdx)}
+                                        style={{
+                                          flex: 1,
+                                          padding: '0.25rem 0.4rem',
+                                          backgroundColor: '#FFFFFF',
+                                          color: '#1D4ED8',
+                                          border: '1px solid #BFDBFE',
+                                          borderRadius: '6px',
+                                          fontSize: '0.7rem',
+                                          fontWeight: 700,
+                                          cursor: 'pointer',
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          justifyContent: 'center',
+                                          gap: '0.2rem'
+                                        }}
+                                        title="Modificar fecha y hora de entrega"
+                                      >
+                                        <Edit3 size={11} />
+                                        <span>Ajustar Fecha</span>
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleRemoveCheckpoint(managingCheckpointsReg.id, existingIdx)}
+                                        style={{
+                                          padding: '0.25rem 0.45rem',
+                                          backgroundColor: '#FEF2F2',
+                                          color: '#DC2626',
+                                          border: '1px solid #FECACA',
+                                          borderRadius: '6px',
+                                          fontSize: '0.7rem',
+                                          fontWeight: 700,
+                                          cursor: 'pointer'
+                                        }}
+                                        title="Desmarcar entrega"
+                                      >
+                                        <Trash2 size={11} />
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      )
+                    })()}
                   </div>
                 ) : (
                   /* Flat Checkpoints List fallback */
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '0.75rem' }}>
-                    {eventCheckpoints.filter((cp: string) => !isKitName(cp)).map((cpName: string, cpIdx: number) => {
+                    {allModalCheckpoints.map((cpName: string, cpIdx: number) => {
                       const existingIdx = cps.findIndex((c: any) => c.name === cpName)
                       const isDelivered = existingIdx >= 0
                       const scanInfo = isDelivered ? cps[existingIdx] : null

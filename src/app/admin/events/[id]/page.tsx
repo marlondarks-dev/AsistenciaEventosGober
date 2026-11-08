@@ -47,26 +47,54 @@ export default async function EventDetailPage({ params }: { params: Promise<{ id
   let allowedEmails: string[] = []
   let checkpoints: string[] = ['Ingreso']
   let dailySchedule: any = null
-  try {
-    const parsed = event.requiredFields ? JSON.parse(event.requiredFields) : {}
-    municipalityQuotas = parsed.municipalityQuotas || {}
-    restrictedByEmail = Boolean(parsed.restrictedByEmail)
-    allowedEmails = Array.isArray(parsed.allowedEmails) ? parsed.allowedEmails : []
-    checkpoints = Array.isArray(parsed.checkpoints) ? parsed.checkpoints : ['Ingreso']
-    dailySchedule = parsed.dailySchedule || null
-  } catch (e) {}
-
-  // Calculate checkpoints stats
-  const checkpointStats: Record<string, number> = {}
-  checkpoints.forEach(cpName => {
-    checkpointStats[cpName] = 0
-  })
+  let eventHasKit = true
 
   const isKit = (n: string) => {
     if (!n) return false
     const norm = n.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
     return norm.includes('kit') || norm.includes('bienvenida')
   }
+
+  try {
+    const parsed = event.requiredFields ? JSON.parse(event.requiredFields) : {}
+    municipalityQuotas = parsed.municipalityQuotas || {}
+    restrictedByEmail = Boolean(parsed.restrictedByEmail)
+    allowedEmails = Array.isArray(parsed.allowedEmails) ? parsed.allowedEmails : []
+    checkpoints = Array.isArray(parsed.checkpoints) ? [...parsed.checkpoints] : ['Ingreso']
+    dailySchedule = parsed.dailySchedule || null
+    if (parsed.hasKit === false) {
+      eventHasKit = false
+      checkpoints = checkpoints.filter(cp => !isKit(cp))
+    }
+  } catch (e) {}
+
+  // Discover any checkpoints present across registrations so they are never lost from dashboard & metrics
+  event.registrations.forEach(r => {
+    if (!r.checkpoints) return
+    try {
+      const cps = typeof r.checkpoints === 'string' ? JSON.parse(r.checkpoints) : r.checkpoints
+      if (Array.isArray(cps)) {
+        cps.forEach((c: any) => {
+          if (c?.name && typeof c.name === 'string') {
+            const trimmed = c.name.trim()
+            if (trimmed) {
+              if (isKit(trimmed)) {
+                if (eventHasKit && !checkpoints.includes(trimmed)) checkpoints.push(trimmed)
+              } else if (!checkpoints.includes(trimmed)) {
+                checkpoints.push(trimmed)
+              }
+            }
+          }
+        })
+      }
+    } catch {}
+  })
+
+  // Calculate checkpoints stats
+  const checkpointStats: Record<string, number> = {}
+  checkpoints.forEach(cpName => {
+    checkpointStats[cpName] = 0
+  })
 
   let attendedWithoutIngreso = 0
   event.registrations.forEach(r => {
