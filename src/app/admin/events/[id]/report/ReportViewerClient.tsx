@@ -354,6 +354,12 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
         if (Array.isArray(parsed)) cps.push(...parsed)
       } catch {}
     }
+    // Ordenar cronológicamente para que Ingreso, Jueves, Viernes, Sábado salgan en orden exacto
+    cps.sort((a, b) => {
+      const tA = a.timestamp ? new Date(a.timestamp).getTime() : 0
+      const tB = b.timestamp ? new Date(b.timestamp).getTime() : 0
+      return tA - tB
+    })
 
     // Parse additionalData
     let addData: Record<string, any> = {}
@@ -581,6 +587,15 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
     pdf.setDrawColor(226, 232, 240)
     pdf.line(marginX, 129, marginX + contentW, 129)
 
+    const drawFooter = () => {
+      pdf.setDrawColor(226, 232, 240)
+      pdf.line(marginX, 266, marginX + contentW, 266)
+      pdf.setFont('helvetica', 'normal')
+      pdf.setFontSize(7)
+      pdf.setTextColor(148, 163, 184)
+      pdf.text('Sistema Institucional de Control de Asistencia y Entregas • Gobernación de Norte de Santander', marginX, 271)
+    }
+
     let currentY = 132.5
     if (cps.length === 0) {
       pdf.setFillColor(248, 250, 252)
@@ -590,9 +605,10 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
       pdf.setFontSize(8.5)
       pdf.setTextColor(148, 163, 184)
       pdf.text('No hay puntos de control o refrigerios registrados aún para este participante.', marginX + contentW / 2, currentY + 10, { align: 'center' })
-    } else {
-      const maxCps = Math.min(cps.length, 5) // Hasta 5 puntos caben perfectamente con foto en página 1
-      for (let k = 0; k < maxCps; k++) {
+      drawFooter()
+    } else if (cps.length <= 5) {
+      // Hasta 5 entregas: 1 columna amplia y espaciosa
+      for (let k = 0; k < cps.length; k++) {
         const cp = cps[k]
         const cardH = 21
 
@@ -659,26 +675,152 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
 
         currentY += 23.5
       }
+      drawFooter()
+    } else {
+      // Más de 5 entregas: 2 columnas ejecutivas para mostrar absolutamente todos los refrigerios sin omitir ninguno
+      const colGap = 4
+      const colW = (contentW - colGap) / 2 // ~91.95 mm
+      const cardH = 18
+      const rowStep = 20.5
+      let colIndex = 0
+      let rowStartY = currentY
 
-      if (cps.length > 5) {
-        pdf.setFont('helvetica', 'italic')
-        pdf.setFontSize(8)
+      const drawHeaderContinuation = () => {
+        // Franja superior
+        pdf.setFillColor(220, 38, 38)
+        pdf.rect(marginX, 9, 60, 1.5, 'F')
+        pdf.setFillColor(15, 23, 42)
+        pdf.rect(marginX + 60, 9, contentW - 60, 1.5, 'F')
+
+        // Banner
+        pdf.setFillColor(248, 250, 252)
+        pdf.setDrawColor(226, 232, 240)
+        pdf.setLineWidth(0.35)
+        pdf.roundedRect(marginX, 12.5, contentW, 16, 2, 2, 'FD')
+
+        pdf.setFont('helvetica', 'bold')
+        pdf.setFontSize(7.5)
         pdf.setTextColor(100, 116, 139)
-        pdf.text(`... y ${cps.length - 5} entregas adicionales registradas en el sistema`, marginX + 5, currentY + 3)
+        pdf.text('REPÚBLICA DE COLOMBIA • GOBERNACIÓN DE NORTE DE SANTANDER', marginX + 6, 17)
+
+        pdf.setFont('helvetica', 'bold')
+        pdf.setFontSize(9.5)
+        pdf.setTextColor(15, 23, 42)
+        pdf.text('CONTROL INDIVIDUAL DE ASISTENCIA Y ENTREGAS (CONTINUACIÓN)', marginX + 6, 23.5)
+
+        // Resumen participante
+        pdf.setFillColor(255, 255, 255)
+        pdf.setDrawColor(203, 213, 225)
+        pdf.roundedRect(marginX, 30.5, contentW, 9, 1.5, 1.5, 'FD')
+
+        pdf.setFont('helvetica', 'bold')
+        pdf.setFontSize(8)
+        pdf.setTextColor(15, 23, 42)
+        const namePart = (fullName || 'PARTICIPANTE').substring(0, 45)
+        pdf.text(`Participante: ${namePart}`, marginX + 3.5, 36)
+
+        pdf.setFont('helvetica', 'normal')
+        pdf.setFontSize(7.5)
+        pdf.setTextColor(100, 116, 139)
+        pdf.text(`Doc: ${p.documentType || 'DOC'} ${p.documentNumber || 'S/N'} • ID: ${reg.id.slice(-8).toUpperCase()}`, marginX + contentW - 3.5, 36, { align: 'right' })
+
+        // Título sección continuación
+        pdf.setFont('helvetica', 'bold')
+        pdf.setFontSize(8)
+        pdf.setTextColor(51, 65, 85)
+        pdf.text('PUNTOS DE CONTROL Y ENTREGAS ADICIONALES', marginX, 44)
+        pdf.setDrawColor(226, 232, 240)
+        pdf.line(marginX, 45.5, marginX + contentW, 45.5)
+
+        rowStartY = 48
+        colIndex = 0
+      }
+
+      drawFooter()
+
+      for (let k = 0; k < cps.length; k++) {
+        const cp = cps[k]
+
+        // Si sobrepasa el límite inferior de la página actual, agregar página
+        if (rowStartY + cardH > 263) {
+          pdf.addPage()
+          drawHeaderContinuation()
+          drawFooter()
+        }
+
+        const boxX = marginX + colIndex * (colW + colGap)
+        const boxY = rowStartY
+
+        pdf.setFillColor(255, 255, 255)
+        pdf.setDrawColor(203, 213, 225)
+        pdf.roundedRect(boxX, boxY, colW, cardH, 2, 2, 'FD')
+
+        // Círculo Verde con Check
+        pdf.setFillColor(220, 252, 231)
+        pdf.circle(boxX + 4.5, boxY + 5.5, 2.5, 'F')
+        pdf.setFont('helvetica', 'bold')
+        pdf.setFontSize(6.5)
+        pdf.setTextColor(22, 163, 74)
+        pdf.text('✓', boxX + 4.5, boxY + 6.5, { align: 'center' })
+
+        // Nombre del Punto de Control
+        pdf.setFont('helvetica', 'bold')
+        pdf.setFontSize(7.8)
+        pdf.setTextColor(15, 23, 42)
+        const safeCpName = String(cp.name || 'Punto de Control').substring(0, 32)
+        pdf.text(safeCpName, boxX + 8.5, boxY + 5.5)
+
+        // Fecha y Hora
+        pdf.setFont('helvetica', 'normal')
+        pdf.setFontSize(6.5)
+        pdf.setTextColor(100, 116, 139)
+        pdf.text(`Fecha/Hora: ${formatColombiaDateTime(cp.timestamp)}`, boxX + 8.5, boxY + 10)
+
+        // Funcionario que entregó
+        if (cp.attendedBy) {
+          pdf.setFont('helvetica', 'bold')
+          pdf.setFontSize(6.5)
+          pdf.setTextColor(37, 99, 235)
+          pdf.text(`• Por: ${String(cp.attendedBy).substring(0, 24)}`, boxX + 8.5, boxY + 14.5)
+        }
+
+        // FOTO DE EVIDENCIA EN LA DERECHA
+        const imgX = boxX + colW - 19
+        const imgY = boxY + 2
+        const imgW = 17
+        const imgH = 14
+        const evidenceData = cp.evidenceUrl ? imagesMap.get(cp.evidenceUrl) : null
+
+        if (evidenceData) {
+          try {
+            pdf.addImage(evidenceData, 'JPEG', imgX, imgY, imgW, imgH)
+            pdf.setDrawColor(203, 213, 225)
+            pdf.setLineWidth(0.3)
+            pdf.rect(imgX, imgY, imgW, imgH)
+          } catch {
+            pdf.setFillColor(248, 250, 252)
+            pdf.setDrawColor(226, 232, 240)
+            pdf.roundedRect(imgX, imgY, imgW, imgH, 1, 1, 'FD')
+          }
+        } else {
+          pdf.setFillColor(248, 250, 252)
+          pdf.setDrawColor(226, 232, 240)
+          pdf.roundedRect(imgX, imgY, imgW, imgH, 1, 1, 'FD')
+          pdf.setFont('helvetica', 'normal')
+          pdf.setFontSize(5.5)
+          pdf.setTextColor(148, 163, 184)
+          pdf.text('Sin foto', imgX + imgW / 2, imgY + 8, { align: 'center' })
+        }
+
+        // Alternar columnas
+        if (colIndex === 0) {
+          colIndex = 1
+        } else {
+          colIndex = 0
+          rowStartY += rowStep
+        }
       }
     }
-
-    // 5. PIE DE PÁGINA OFICIAL
-    pdf.setDrawColor(226, 232, 240)
-    pdf.line(marginX, 266, marginX + contentW, 266)
-    pdf.setFont('helvetica', 'normal')
-    pdf.setFontSize(7)
-    pdf.setTextColor(148, 163, 184)
-    pdf.text('Sistema Institucional de Control de Asistencia y Entregas • Gobernación de Norte de Santander', marginX, 271)
-    pdf.setFont('helvetica', 'bold')
-    pdf.setFontSize(7.5)
-    pdf.setTextColor(100, 116, 139)
-    pdf.text(`Página ${pageNum} de ${totalPages}`, marginX + contentW, 271, { align: 'right' })
   }
 
   // Descargar todas las fichas filtradas en un archivo PDF real, con todas sus fotos y diseño ejecutivo
@@ -761,6 +903,17 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
         drawFichaVector(pdf, filteredRegistrations[i], event, i + 1, total, logoInfo, imagesMap)
       }
 
+      // Estampar numeración exacta en todas las páginas generadas
+      const totalPdfPages = pdf.internal.getNumberOfPages()
+      const rightX = 14 + 187.9
+      for (let p = 1; p <= totalPdfPages; p++) {
+        pdf.setPage(p)
+        pdf.setFont('helvetica', 'bold')
+        pdf.setFontSize(7.5)
+        pdf.setTextColor(100, 116, 139)
+        pdf.text(`Página ${p} de ${totalPdfPages}`, rightX, 271, { align: 'right' })
+      }
+
       setPdfProgressText('Descargando archivo...')
       const safeEventName = (event.name || 'Evento').replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 30)
       pdf.save(`Fichas_Asistencia_${safeEventName}.pdf`)
@@ -827,6 +980,17 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
       })
 
       drawFichaVector(pdf, reg, event, 1, 1, logoInfo, imagesMap)
+
+      // Estampar numeración exacta en todas las páginas generadas
+      const totalPdfPages = pdf.internal.getNumberOfPages()
+      const rightX = 14 + 187.9
+      for (let p = 1; p <= totalPdfPages; p++) {
+        pdf.setPage(p)
+        pdf.setFont('helvetica', 'bold')
+        pdf.setFontSize(7.5)
+        pdf.setTextColor(100, 116, 139)
+        pdf.text(`Página ${p} de ${totalPdfPages}`, rightX, 271, { align: 'right' })
+      }
 
       const safeName = (participantName || 'Participante').replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 30)
       pdf.save(`Ficha_${safeName}.pdf`)
@@ -928,8 +1092,8 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
             word-break: break-word;
           }
           .checkpoints-container {
-            display: flex;
-            flex-direction: column;
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
             gap: 0.65rem;
           }
           .checkpoint-card {
@@ -1415,6 +1579,12 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
                 if (Array.isArray(parsed)) cps.push(...parsed)
               } catch (e) {}
             }
+            // Ordenar cronológicamente
+            cps.sort((a: any, b: any) => {
+              const tA = a.timestamp ? new Date(a.timestamp).getTime() : 0
+              const tB = b.timestamp ? new Date(b.timestamp).getTime() : 0
+              return tA - tB
+            })
 
             let addData: Record<string, any> = {}
             if (p.additionalData) {

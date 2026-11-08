@@ -190,6 +190,7 @@ export async function POST(
       }
 
       revalidatePath(`/admin/events/${eventId}`)
+      revalidatePath(`/admin/events/${eventId}/report`)
       return NextResponse.json({
         success: true,
         message: `Se sincronizó el punto "Ingreso" para ${updatedCount} asistentes verificados.`,
@@ -240,6 +241,7 @@ export async function POST(
       })
 
       revalidatePath(`/admin/events/${eventId}`)
+      revalidatePath(`/admin/events/${eventId}/report`)
       revalidatePath(`/admin/events/${eventId}/scanner`)
       return NextResponse.json({
         success: true,
@@ -284,6 +286,7 @@ export async function POST(
       })
 
       revalidatePath(`/admin/events/${eventId}`)
+      revalidatePath(`/admin/events/${eventId}/report`)
       revalidatePath(`/admin/events/${eventId}/scanner`)
       return NextResponse.json({
         success: true,

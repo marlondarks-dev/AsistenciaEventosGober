@@ -24,6 +24,7 @@ export async function DELETE(
     })
 
     revalidatePath(`/admin/events/${reg.eventId}`)
+    revalidatePath(`/admin/events/${reg.eventId}/report`)
     return NextResponse.json({ success: true })
   } catch (err: any) {
     console.error('Delete registration error:', err)
@@ -206,6 +207,7 @@ export async function PATCH(
     })
 
     revalidatePath(`/admin/events/${reg.eventId}`)
+    revalidatePath(`/admin/events/${reg.eventId}/report`)
     return NextResponse.json({ success: true, registration: updated })
   } catch (err: any) {
     console.error('Update registration error:', err)

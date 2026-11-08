@@ -183,6 +183,7 @@ export async function POST(request: Request) {
     })
 
     revalidatePath(`/admin/events/${eventId}`)
+    revalidatePath(`/admin/events/${eventId}/report`)
 
     return NextResponse.json({ 
       success: true, 

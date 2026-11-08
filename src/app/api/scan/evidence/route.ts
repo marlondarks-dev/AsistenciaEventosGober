@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
+import { revalidatePath } from 'next/cache'
 
 export async function POST(req: Request) {
   try {
@@ -38,6 +39,9 @@ export async function POST(req: Request) {
           }
         } catch (err) {}
       }
+
+      revalidatePath(`/admin/events/${reg.eventId}`)
+      revalidatePath(`/admin/events/${reg.eventId}/report`)
 
       return NextResponse.json({ success: true })
     }
