@@ -65,85 +65,100 @@ export const isKitName = (name: string): boolean => {
   return lower.includes('kit') || lower.includes('bienvenida')
 }
 
-export function getCheckpointSortRank(cp: any, configuredList: string[] = []): number {
+export function getCheckpointSortRank(cp: any): number {
   const rawName = (cp?.name || '').trim()
   const name = rawName.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim()
 
-  // 1. Ingreso general (siempre de primero)
+  // 1. Ingreso general: siempre de primero absoluto (rank: 0)
   if (name === 'ingreso' || name.startsWith('ingreso general') || name === 'registro de ingreso' || name.startsWith('puerta')) {
-    return -1000000
+    return 0
   }
 
-  // 2. Kit de Bienvenida (siempre de segundo)
+  // 2. Kit de Bienvenida: siempre de segundo absoluto (rank: 1)
   if (name.includes('kit') || name.includes('bienvenida')) {
-    return -900000
+    return 1
   }
 
-  // 3. Coincidencia con lista configurada
-  if (configuredList && configuredList.length > 0) {
-    const idx = configuredList.findIndex(c => {
-      const cNorm = (c || '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim()
-      return cNorm === name || name === cNorm || name.includes(cNorm) || cNorm.includes(name)
-    })
-    if (idx !== -1) {
-      return -500000 + (idx * 1000)
-    }
+  // 3. Extracción de Día
+  let dayNum = 0
+
+  // A) Si el nombre contiene día con número (ej. "Jueves 22", "Viernes 23", "Miércoles 21", "22 de Octubre")
+  const calMatch = name.match(/(?:lunes|martes|miercoles|jueves|viernes|sabado|domingo)\s*(\d{1,2})/i) || 
+                   name.match(/\b(\d{1,2})\s*(?:de|-)\b/i)
+  if (calMatch && calMatch[1]) {
+    dayNum = parseInt(calMatch[1], 10)
   }
 
-  // 4. Extracción de Día de la semana (Lunes=1, Martes=2, Miércoles=3, Jueves=4, Viernes=5, Sábado=6, Domingo=7)
-  let weekdayOrder = 0
-  if (name.includes('lunes')) weekdayOrder = 1
-  else if (name.includes('martes')) weekdayOrder = 2
-  else if (name.includes('miercoles')) weekdayOrder = 3
-  else if (name.includes('jueves')) weekdayOrder = 4
-  else if (name.includes('viernes')) weekdayOrder = 5
-  else if (name.includes('sabado')) weekdayOrder = 6
-  else if (name.includes('domingo')) weekdayOrder = 7
-
+  // B) Si tiene "Dia 1", "Dia 2", etc.
   const diaMatch = name.match(/dia\s*(\d+)/i)
   if (diaMatch && diaMatch[1]) {
-    weekdayOrder = parseInt(diaMatch[1], 10)
+    dayNum = parseInt(diaMatch[1], 10)
   }
 
-  const calMatch = name.match(/(?:lunes|martes|miercoles|jueves|viernes|sabado|domingo)\s*(\d+)/i) || 
-                   name.match(/\b(\d{1,2})\s*(?:de|-)\b/i)
-  let calDay = 0
-  if (calMatch && calMatch[1]) {
-    calDay = parseInt(calMatch[1], 10)
+  // C) Si no tiene número pero tiene día de la semana (Lunes=1 ... Domingo=7)
+  if (dayNum === 0) {
+    if (name.includes('lunes')) dayNum = 1
+    else if (name.includes('martes')) dayNum = 2
+    else if (name.includes('miercoles')) dayNum = 3
+    else if (name.includes('jueves')) dayNum = 4
+    else if (name.includes('viernes')) dayNum = 5
+    else if (name.includes('sabado')) dayNum = 6
+    else if (name.includes('domingo')) dayNum = 7
   }
 
-  let dayScore = 0
-  if (calDay > 0) {
-    dayScore = calDay * 10000
-  } else if (weekdayOrder > 0) {
-    dayScore = weekdayOrder * 10000
-  }
-
-  // 5. Extracción de comida / momento del día
-  let mealScore = 500
-  if (name.includes('ingreso')) mealScore = 0
-  else if (name.includes('desayuno')) mealScore = 100
-  else if (name.includes('manana') || name.includes('am') || name.includes('refrigerio 1') || name.includes('media manana')) mealScore = 200
-  else if (name.includes('almuerzo')) mealScore = 300
-  else if (name.includes('tarde') || name.includes('pm') || name.includes('refrigerio 2')) mealScore = 400
-  else if (name.includes('cena')) mealScore = 500
-  else if (name.includes('noche') || name.includes('refrigerio 3') || name.includes('clausura') || name.includes('brindis')) mealScore = 600
-  else if (name.includes('refrigerio')) mealScore = 250
-
-  if (dayScore === 0 && cp.timestamp) {
+  // D) Si no se detectó día en el nombre, usar la fecha del timestamp
+  if (dayNum === 0 && cp.timestamp) {
     const d = new Date(cp.timestamp)
     if (!isNaN(d.getTime())) {
-      return 100000 + (d.getTime() / 10000000)
+      dayNum = d.getDate()
     }
   }
 
-  return dayScore + mealScore
+  // 4. Extracción del momento / comida dentro del día
+  // Desayuno -> 1, Refrigerio Mañana -> 2, Almuerzo -> 3, Refrigerio Tarde -> 4, Cena -> 5, Refrigerio Noche -> 6
+  let mealOrder = 5
+  if (name.includes('ingreso')) mealOrder = 0
+  else if (name.includes('desayuno')) mealOrder = 1
+  else if (name.includes('manana') || name.includes('am') || name.includes('refrigerio 1') || name.includes('media manana') || name.includes('refrigerio manana')) mealOrder = 2
+  else if (name.includes('almuerzo')) mealOrder = 3
+  else if (name.includes('tarde') || name.includes('pm') || name.includes('refrigerio 2') || name.includes('refrigerio tarde')) mealOrder = 4
+  else if (name.includes('cena')) mealOrder = 5
+  else if (name.includes('noche') || name.includes('refrigerio 3') || name.includes('clausura') || name.includes('brindis')) mealOrder = 6
+  else if (name.includes('refrigerio')) {
+    if (cp.timestamp) {
+      const d = new Date(cp.timestamp)
+      if (!isNaN(d.getTime())) {
+        const h = d.getHours()
+        mealOrder = h < 12 ? 2 : 4
+      } else {
+        mealOrder = 2.5
+      }
+    } else {
+      mealOrder = 2.5
+    }
+  }
+
+  // 5. Minutos del timestamp para ordenar exactamente si hay empates
+  let timeMinutes = 0
+  if (cp.timestamp) {
+    const d = new Date(cp.timestamp)
+    if (!isNaN(d.getTime())) {
+      timeMinutes = d.getHours() * 60 + d.getMinutes()
+    }
+  }
+
+  // Rank:
+  // Base 10 (0 para Ingreso, 1 para Kit)
+  // Cada día vale 1,000,000
+  // Cada comida vale 10,000
+  // Minutos valen 0..1440
+  return 10 + (dayNum * 1000000) + (mealOrder * 10000) + timeMinutes
 }
 
-export function sortCheckpointsChronologically(cps: any[], configuredList: string[] = []): any[] {
+export function sortCheckpointsChronologically(cps: any[]): any[] {
   return [...cps].sort((a, b) => {
-    const rankA = getCheckpointSortRank(a, configuredList)
-    const rankB = getCheckpointSortRank(b, configuredList)
+    const rankA = getCheckpointSortRank(a)
+    const rankB = getCheckpointSortRank(b)
     if (rankA !== rankB) return rankA - rankB
     const tA = a.timestamp ? new Date(a.timestamp).getTime() : 0
     const tB = b.timestamp ? new Date(b.timestamp).getTime() : 0
@@ -2788,7 +2803,7 @@ export default function RegistrationsTable({
         try {
           const rawParsed = JSON.parse(viewingReg.checkpoints || '[]')
           if (Array.isArray(rawParsed)) {
-            cps = sortCheckpointsChronologically(rawParsed, eventCheckpoints)
+            cps = sortCheckpointsChronologically(rawParsed)
           }
           if (!photoUrl) {
             const ingresoCp = cps.find((c: any) => c.name === 'Ingreso' && c.evidenceUrl)
