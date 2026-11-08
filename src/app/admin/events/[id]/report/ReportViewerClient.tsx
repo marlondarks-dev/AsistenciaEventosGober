@@ -668,19 +668,7 @@ export default function ReportViewerClient({ event, registrations }: ReportViewe
       }
     }
 
-    // 5. LÍNEAS DE FIRMA Y CONFORMIDAD INSTITUCIONAL (y: 253 a 263 mm)
-    pdf.setDrawColor(203, 213, 225)
-    pdf.setLineWidth(0.35)
-    pdf.line(marginX + 15, 254, marginX + 75, 254)
-    pdf.setFont('helvetica', 'bold')
-    pdf.setFontSize(6.5)
-    pdf.setTextColor(100, 116, 139)
-    pdf.text('FIRMA / ACEPTACIÓN DEL PARTICIPANTE', marginX + 45, 258, { align: 'center' })
-
-    pdf.line(marginX + contentW - 75, 254, marginX + contentW - 15, 254)
-    pdf.text('RESPONSABLE DE ENTREGA Y REGISTRO', marginX + contentW - 45, 258, { align: 'center' })
-
-    // 6. PIE DE PÁGINA OFICIAL
+    // 5. PIE DE PÁGINA OFICIAL
     pdf.setDrawColor(226, 232, 240)
     pdf.line(marginX, 266, marginX + contentW, 266)
     pdf.setFont('helvetica', 'normal')
